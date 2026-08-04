@@ -23,7 +23,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests dict2xml google-api-python-client google-auth
 
-    - name: Run Feed Generation & GDrive Upload
+    - name: Run Feed Processor Script
       env:
         WOO_URL: ${{ secrets.WOO_URL }}
         WOO_KEY: ${{ secrets.WOO_KEY }}
