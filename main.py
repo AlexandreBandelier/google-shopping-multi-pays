@@ -72,41 +72,47 @@ def fetch_all_woocommerce_products(url, key, secret):
 
 
 def generate_rss_xml(cleaned_products):
-    """Convertit la liste des produits nettoyés au format XML standard Google Shopping (RSS 2.0)."""
-    items = []
-    for prod in cleaned_products:
-        item = {
-            'g:id': prod['id'],
-            'title': prod['title'],
-            'description': prod['description'],
-            'link': prod['link'],
-            'g:image_link': prod['image_link'],
-            'g:availability': prod['availability'],
-            'g:price': prod['price'],
-            'g:gender': prod['gender'],
-            'g:age_group': prod['age_group'],
-            'g:size': prod['size'],
-            'g:identifier_exists': prod['identifier_exists']
-        }
-        if prod.get('color'):
-            item['g:color'] = prod['color']
-            
-        items.append(item)
-
-    xml_structure = {
-        'rss': {
-            '@version': '2.0',
-            '@xmlns:g': 'http://base.google.com/ns/1.0',
-            'channel': {
-                'title': 'Flux Produits WooCommerce',
-                'link': os.getenv('WOO_URL', ''),
-                'description': 'Flux automatique enrichi via Python & GitHub Actions',
-                'item': items
-            }
-        }
-    }
+    """
+    Convertit la liste des produits nettoyés au format XML standard Google Shopping (RSS 2.0).
+    Formate correctement le namespace 'xmlns:g' pour éviter l'erreur "Attribute missing namespace".
+    """
+    items_xml = []
     
-    return dict2xml(xml_structure)
+    for prod in cleaned_products:
+        item_str = f"""      <item>
+        <g:id>{prod['id']}</g:id>
+        <title><![CDATA[{prod['title']}]]></title>
+        <description><![CDATA[{prod['description']}]]></description>
+        <link>{prod['link']}</link>
+        <g:image_link>{prod['image_link']}</g:image_link>
+        <g:availability>{prod['availability']}</g:availability>
+        <g:price>{prod['price']}</g:price>
+        <g:gender>{prod['gender']}</g:gender>
+        <g:age_group>{prod['age_group']}</g:age_group>
+        <g:size>{prod['size']}</g:size>
+        <g:identifier_exists>{prod['identifier_exists']}</g:identifier_exists>"""
+        
+        if prod.get('color'):
+            item_str += f"\n        <g:color>{prod['color']}</g:color>"
+            
+        item_str += "\n      </item>"
+        items_xml.append(item_str)
+
+    items_block = "\n".join(items_xml)
+    woo_url = os.getenv('WOO_URL', '')
+
+    # Structure RSS 2.0 exacte attendue par Google Merchant Center
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
+  <channel>
+    <title>Flux Produits WooCommerce</title>
+    <link>{woo_url}</link>
+    <description>Flux automatique enrichi via Python &amp; GitHub Actions</description>
+{items_block}
+  </channel>
+</rss>"""
+
+    return xml_content
 
 
 def main():
