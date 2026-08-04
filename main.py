@@ -100,7 +100,7 @@ def upload_to_drive(xml_content, folder_id):
     creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
     service = build("drive", "v3", credentials=creds)
 
-    filename = "google_shopping_feed.xml"
+    filename = "Shopping Graph_feed.xml"
     
     # Recherche du fichier existant
     query = f"'{folder_id}' in parents and name = '{filename}' and trashed = false"
