@@ -159,5 +159,10 @@ def main():
     # 5. Envoi vers Google Drive
     upload_to_drive(xml_content, folder_id)
 
+    # Extraction & Génération Flux Avis
+    raw_reviews = fetch_all_product_reviews(wcapi)
+    xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
+    upload_to_drive(xml_reviews, folder_id, "product_reviews_feed.xml")
+
 if __name__ == "__main__":
     main()
