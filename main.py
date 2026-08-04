@@ -123,12 +123,20 @@ def upload_to_drive(xml_content, folder_id):
 
 def main():
     woo_url = os.getenv('WOO_URL')
-    woo_ck = os.getenv('WOO_CK')
-    woo_cs = os.getenv('WOO_CS')
+    woo_ck = os.getenv('WOO_KEY')       # Modifié pour correspondre au secret WOO_KEY
+    woo_cs = os.getenv('WOO_SECRET')    # Modifié pour correspondre au secret WOO_SECRET
     folder_id = os.getenv('GDRIVE_FOLDER_ID')
 
-    if not all([woo_url, woo_ck, woo_cs, folder_id]):
-        raise ValueError("Variables d'environnement WooCommerce ou Drive manquantes.")
+    # Diagnostic explicite en cas de variable manquante
+    missing_vars = [var for var, val in {
+        'WOO_URL': woo_url,
+        'WOO_KEY': woo_ck,
+        'WOO_SECRET': woo_cs,
+        'GDRIVE_FOLDER_ID': folder_id
+    }.items() if not val]
+
+    if missing_vars:
+        raise ValueError(f"Variables d'environnement manquantes : {', '.join(missing_vars)}")
 
     # 1. Initialisation de l'API WooCommerce
     wcapi = API(
