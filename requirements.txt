@@ -1,0 +1,2 @@
+requests>=2.31.0
+dict2xml>=1.7.5
