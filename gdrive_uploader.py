@@ -8,29 +8,30 @@ from googleapiclient.http import MediaFileUpload
 def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
     """
     Téléverse ou remplace le fichier XML dans le dossier Google Drive spécifié.
-    Optimisé pour la résilience réseau et la vitesse d'exécution.
+    Fixe l'erreur de quota des Comptes de Service (storageQuotaExceeded / HttpError 403).
     """
-    scopes = ['https://www.googleapis.com/auth/drive.file']
+    scopes = ['https://www.googleapis.com/auth/drive']
     account_info = json.loads(service_account_json_str)
     creds = Credentials.from_service_account_info(account_info, scopes=scopes)
     service = build('drive', 'v3', credentials=creds)
 
     filename = os.path.basename(file_path)
 
-    # 1. OPTIMISATION : Échappement des caractères spéciaux dans la recherche
+    # 1. Échappement des caractères spéciaux
     safe_filename = filename.replace("'", "\\'")
     query = f"'{folder_id}' in parents and name = '{safe_filename}' and trashed = false"
 
-    # 2. OPTIMISATION : Requête légère (pageSize=1, fields stricts)
+    # 2. Recherche du fichier dans le dossier
     results = service.files().list(
         q=query, 
         pageSize=1, 
-        fields="files(id)"
+        fields="files(id)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
     ).execute()
     
     items = results.get('files', [])
 
-    # 3. OPTIMISATION : Upload résilient en mode 'resumable'
     media = MediaFileUpload(
         file_path, 
         mimetype='application/xml', 
@@ -43,7 +44,8 @@ def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
         updated_file = service.files().update(
             fileId=file_id, 
             media_body=media, 
-            fields='id'
+            fields='id',
+            supportsAllDrives=True
         ).execute()
         print(f"Fichier Google Drive mis à jour (ID: {updated_file.get('id')})")
     else:
@@ -55,6 +57,7 @@ def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
         created_file = service.files().create(
             body=file_metadata, 
             media_body=media, 
-            fields='id'
+            fields='id',
+            supportsAllDrives=True  # Prise en charge des quotas du dossier parent
         ).execute()
-        print(f"✅ Fichier téléversé sur Google Drive (ID: {created_file.get('id')})")
+        print(f"Fichier téléversé sur Google Drive (ID: {created_file.get('id')})")
