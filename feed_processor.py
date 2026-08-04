@@ -2,114 +2,107 @@
 import html
 import re
 
-# Configuration centralisée des alias d'attributs (facile à enrichir)
-ATTRIBUTE_MAP = {
-    'color': ['couleur kimono', 'couleur ceinture', 'couleur', 'color'],
-    'size': ['taille kimono', 'taille ceinture', 'taille', 'size'],
-    'material': ['tissus kimono', 'tissus ceinture', 'tissu', 'tissus', 'matière', 'matiere', 'material'],
-    'gamme': ['gamme', 'range'],
-    'work_type': ['type de travail', 'discipline', 'usage'],
-    'public': ['public', 'cible'],
-    'customization': ['personnalisation', 'customisation', 'broderie'],
-    'karate_weight': ['poids karate-gi', 'poids karaté-gi'],
-    'gender': ['genre', 'gender', 'sexe'],
-    'age_group': ['tranche d\'âge', 'age group', 'age']
-}
-
-def clean_html(raw_html):
-    """Supprime les balises HTML et décode proprement les entités (ex: &nbsp;, &amp;)."""
-    if not raw_html:
+def clean_html(text):
+    """Nettoie le HTML et les espaces superflus."""
+    if not text:
         return ""
-    text = re.sub(r'<[^>]+>', ' ', raw_html)
-    text = html.unescape(text)
-    return " ".join(text.split())
-
-def build_attributes_dict(item):
-    """Indexe tous les attributs de l'item et du parent en une seule passe."""
-    attr_dict = {}
-    
-    # 1. Attributs du parent
-    for attr in item.get('parent_attributes', []):
-        name = attr.get('name', '').strip().lower()
-        options = attr.get('options', [])
-        if options:
-            attr_dict[name] = ", ".join(options)
-            
-    # 2. Attributs de la variation / produit (écrasent le parent si présent)
-    for attr in item.get('attributes', []):
-        name = attr.get('name', '').strip().lower()
-        option = attr.get('option')
-        if option:
-            attr_dict[name] = option
-        elif attr.get('options'):
-            attr_dict[name] = ", ".join(attr['options'])
-            
-    return attr_dict
-
-def extract_attribute_by_keywords(attr_dict, keywords):
-    """Recherche ultra-rapide par mot-clé dans la table d'attributs indexée."""
-    for attr_name, attr_value in attr_dict.items():
-        if any(kw in attr_name for kw in keywords):
-            return attr_value
-    return ""
+    clean = re.sub(r'<[^>]+>', ' ', str(text))
+    return " ".join(clean.split())
 
 def process_product_item(item):
-    """Transforme l'objet produit/variation WooCommerce en dictionnaire pour le flux XML."""
-    is_variation = 'parent_id' in item
+    """
+    Traite un produit simple ou une variante WooCommerce 
+    et extrait toutes les métadonnées pour Google Shopping.
+    """
+    prod_id = str(item.get('id'))
     parent_id = item.get('parent_id')
+    item_group_id = str(parent_id) if parent_id else None
+
+    title = clean_html(item.get('name', ''))
+    description = clean_html(item.get('description', ''))
+    link = item.get('permalink', '')
     
-    item_id = str(item['id'])
-    base_title = item.get('parent_name') if is_variation else item.get('name', '')
-    
-    # Gestion des images
+    # --- Images ---
     images = item.get('images', [])
-    image_link = images[0]['src'] if images else ""
-    if not image_link and is_variation and item.get('parent_images'):
-        image_link = item['parent_images'][0]['src']
-        
-    additional_images = [img['src'] for img in images[1:]] if len(images) > 1 else []
+    image_link = images[0].get('src') if images else ""
+    additional_images = [img.get('src') for img in images[1:] if img.get('src')]
 
-    # 1. Indexation unique des attributs
-    attr_dict = build_attributes_dict(item)
-    
-    # 2. Extraction groupée via la carte d'attributs
-    extracted = {
-        key: extract_attribute_by_keywords(attr_dict, keywords) 
-        for key, keywords in ATTRIBUTE_MAP.items()
-    }
+    # --- Prix ---
+    price_val = item.get('price', '0')
+    price = f"{price_val} EUR" if price_val else "0 EUR"
 
-    # Poids d'expédition
-    weight_raw = item.get('weight', '')
-    shipping_weight = f"{weight_raw} kg" if weight_raw and weight_raw != "ND" else ""
+    # --- Option 3 : Stock & Availability ---
+    stock_status = item.get('stock_status', 'instock')
+    if stock_status == 'instock':
+        availability = 'in_stock'
+        custom_stock_label = 'En Stock'
+    elif stock_status == 'onbackorder':
+        availability = 'backorder'
+        custom_stock_label = 'Sur Commande'
+    else:
+        availability = 'out of stock'
+        custom_stock_label = 'Rupture'
 
-    # Fil d'ariane Catégories
-    categories = item.get('categories', [])
-    product_type = " > ".join([cat['name'] for cat in categories]) if categories else ""
+    # --- Option 1 : Identification sans GTIN (MPN / Brand / SKU) ---
+    sku = item.get('sku') or prod_id  # UGS unique de la variante ou du produit
+    mpn = str(sku)
+    brand = "VotreMarque"  # Remplacez "VotreMarque" par le nom officiel de votre marque
+
+    # --- Attributs & Déclinaisons (Taille, Couleur, Matière, etc.) ---
+    attributes = item.get('attributes', [])
+    size = None
+    color = None
+    material = None
+    discipline = None
+    gamme = None
+    public = None
+    personnalisation = None
+
+    for attr in attributes:
+        name = attr.get('name', '').lower()
+        option = attr.get('option', '')
+
+        if 'taille' in name or 'size' in name:
+            size = option
+        elif 'couleur' in name or 'color' in name:
+            color = option
+        elif 'matière' in name or 'tissu' in name or 'material' in name:
+            material = option
+        elif 'discipline' in name or 'usage' in name:
+            discipline = option
+        elif 'gamme' in name:
+            gamme = option
+        elif 'public' in name or 'niveau' in name:
+            public = option
+        elif 'personnalisation' in name or 'broderie' in name:
+            personnalisation = option
 
     return {
-        'id': item_id,
-        'item_group_id': str(parent_id) if is_variation else "",
-        'title': clean_html(base_title),
-        'description': clean_html(item.get('parent_description') if is_variation else item.get('description', '')),
-        'link': item.get('permalink', ''),
+        'id': prod_id,
+        'item_group_id': item_group_id,
+        'title': title,
+        'description': description,
+        'link': link,
         'image_link': image_link,
         'additional_images': additional_images,
-        'availability': 'in stock' if item.get('stock_status') == 'instock' else 'out of stock',
-        'price': f"{item.get('price', '0')} EUR",
-        'gender': extracted['gender'] or 'unisex',
-        'age_group': extracted['age_group'] or 'adult',
-        'size': extracted['size'],
-        'color': extracted['color'],
-        'material': extracted['material'],
-        'shipping_weight': shipping_weight,
-        'product_type': product_type,
+        'availability': availability,
+        'price': price,
+        'size': size,
+        'color': color,
+        'material': material,
+        'gender': 'unisex',
+        'age_group': 'adult',
         
-        # Custom Labels Google Ads
-        'custom_label_0': extracted['gamme'],
-        'custom_label_1': extracted['work_type'],
-        'custom_label_2': extracted['public'],
-        'custom_label_3': extracted['customization'],
-        'custom_label_4': extracted['karate_weight'],
-        
-        'identifier_exists': 'no'
+        # Option 1 : Identification MPN / Brand / GTIN
+        'identifier_exists': 'no',
+        'mpn': mpn,
+        'brand': brand,
+
+        # Custom Labels Google Ads (custom_label_0 à 4)
+        'custom_label_0': gamme or '',
+        'custom_label_1': discipline or '',
+        'custom_label_2': public or '',
+        'custom_label_3': personnalisation or '',
+        # Option 3 : Segment Stock dans Custom Label 4
+        'custom_label_4': custom_stock_label 
     }
