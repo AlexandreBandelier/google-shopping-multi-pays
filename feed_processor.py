@@ -1,91 +1,115 @@
 # feed_processor.py
-import re
 import html
+import re
 
-# CONSTANTES (Chargées 1 seule fois en mémoire)
-AGE_KEYWORDS = [
-    'enfant', 'enfants', 'junior', 'kodomo', 'kids', 'baby', 
-    'pupille', 'poussin', 'minime', 'taille enfant', 'kimono enfant', 
-    '100cm', '110cm', '120cm', '130cm', '140cm', '150cm'
-]
+# Configuration centralisée des alias d'attributs (facile à enrichir)
+ATTRIBUTE_MAP = {
+    'color': ['couleur kimono', 'couleur ceinture', 'couleur', 'color'],
+    'size': ['taille kimono', 'taille ceinture', 'taille', 'size'],
+    'material': ['tissus kimono', 'tissus ceinture', 'tissu', 'tissus', 'matière', 'matiere', 'material'],
+    'gamme': ['gamme', 'range'],
+    'work_type': ['type de travail', 'discipline', 'usage'],
+    'public': ['public', 'cible'],
+    'customization': ['personnalisation', 'customisation', 'broderie'],
+    'karate_weight': ['poids karate-gi', 'poids karaté-gi'],
+    'gender': ['genre', 'gender', 'sexe'],
+    'age_group': ['tranche d\'âge', 'age group', 'age']
+}
 
-# Pattern Regex compilé avec bordures de mots (\b) pour éviter les faux positifs
-AGE_PATTERN = re.compile(r'\b(' + '|'.join(re.escape(kw) for kw in AGE_KEYWORDS) + r')\b', re.IGNORECASE)
-GENDER_PATTERN = re.compile(r'\b(femme|féminin|women|ladies)\b', re.IGNORECASE)
+def clean_html(raw_html):
+    """Supprime les balises HTML et décode proprement les entités (ex: &nbsp;, &amp;)."""
+    if not raw_html:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', raw_html)
+    text = html.unescape(text)
+    return " ".join(text.split())
 
-def clean_text(text):
-    """Supprime les balises HTML et décode les entités XML/HTML."""
-    if not text:
-        return ''
-    # 1. Supprime les balises HTML <...>
-    text_no_html = re.sub(r'<[^>]+>', ' ', text)
-    # 2. Décode les entités (ex: &amp; -> &)
-    decoded_text = html.unescape(text_no_html)
-    # 3. Nettoie les espaces multiples
-    return ' '.join(decoded_text.split())
-
-def enrich_and_clean_product(product):
-    """
-    Nettoie et enrichit les données d'un produit WooCommerce 
-    selon les règles métier et exigences de Google Merchant Center.
-    """
-    raw_title = product.get('name', '')
-    title = clean_text(raw_title)
-    description = clean_text(product.get('description', ''))
+def build_attributes_dict(item):
+    """Indexe tous les attributs de l'item et du parent en une seule passe."""
+    attr_dict = {}
     
-    categories = [cat['name'] for cat in product.get('categories', [])]
-    cat_str = " ".join(categories)
-    full_text_search = f"{title} {cat_str}"
-
-    # OPTIMISATION 1 : GENDER (Détection Regex exacte)
-    if GENDER_PATTERN.search(full_text_search):
-        gender = 'female'
-    else:
-        gender = 'unisex'
-
-    # OPTIMISATION 2 : AGE GROUP (Mot exact Regex & Catégories)
-    cat_lower = cat_str.lower()
-    if 'enfant' in cat_lower or 'enfants' in cat_lower:
-        age_group = 'kids'
-    elif AGE_PATTERN.search(title):
-        age_group = 'kids'
-    else:
-        age_group = 'adult'
-
-    # 3. SIZE & COLOR (Taille et Couleur)
-    size = None
-    color = None
-
-    for attr in product.get('attributes', []):
-        attr_name = attr.get('name', '').lower()
+    # 1. Attributs du parent
+    for attr in item.get('parent_attributes', []):
+        name = attr.get('name', '').strip().lower()
         options = attr.get('options', [])
-        
         if options:
-            clean_option = clean_text(options[0])
-            if 'taille' in attr_name or 'size' in attr_name:
-                size = clean_option
-            elif 'couleur' in attr_name or 'color' in attr_name:
-                color = clean_option
+            attr_dict[name] = ", ".join(options)
+            
+    # 2. Attributs de la variation / produit (écrasent le parent si présent)
+    for attr in item.get('attributes', []):
+        name = attr.get('name', '').strip().lower()
+        option = attr.get('option')
+        if option:
+            attr_dict[name] = option
+        elif attr.get('options'):
+            attr_dict[name] = ", ".join(attr['options'])
+            
+    return attr_dict
 
-    # Sécurité fallback
-    if not size:
-        size = 'one_size'
+def extract_attribute_by_keywords(attr_dict, keywords):
+    """Recherche ultra-rapide par mot-clé dans la table d'attributs indexée."""
+    for attr_name, attr_value in attr_dict.items():
+        if any(kw in attr_name for kw in keywords):
+            return attr_value
+    return ""
 
-    # OPTIMISATION 3 : STRUCTURATION ROBUSTE (Description & Image)
-    images = product.get('images', [])
-    image_link = images[0]['src'] if images and isinstance(images, list) else ''
+def process_product_item(item):
+    """Transforme l'objet produit/variation WooCommerce en dictionnaire pour le flux XML."""
+    is_variation = 'parent_id' in item
+    parent_id = item.get('parent_id')
+    
+    item_id = str(item['id'])
+    base_title = item.get('parent_name') if is_variation else item.get('name', '')
+    
+    # Gestion des images
+    images = item.get('images', [])
+    image_link = images[0]['src'] if images else ""
+    if not image_link and is_variation and item.get('parent_images'):
+        image_link = item['parent_images'][0]['src']
+        
+    additional_images = [img['src'] for img in images[1:]] if len(images) > 1 else []
+
+    # 1. Indexation unique des attributs
+    attr_dict = build_attributes_dict(item)
+    
+    # 2. Extraction groupée via la carte d'attributs
+    extracted = {
+        key: extract_attribute_by_keywords(attr_dict, keywords) 
+        for key, keywords in ATTRIBUTE_MAP.items()
+    }
+
+    # Poids d'expédition
+    weight_raw = item.get('weight', '')
+    shipping_weight = f"{weight_raw} kg" if weight_raw and weight_raw != "ND" else ""
+
+    # Fil d'ariane Catégories
+    categories = item.get('categories', [])
+    product_type = " > ".join([cat['name'] for cat in categories]) if categories else ""
 
     return {
-        'id': str(product['id']),
-        'title': title,
-        'description': description if description else title, # Fallback sur le titre si desc vide
-        'link': product.get('permalink', ''),
+        'id': item_id,
+        'item_group_id': str(parent_id) if is_variation else "",
+        'title': clean_html(base_title),
+        'description': clean_html(item.get('parent_description') if is_variation else item.get('description', '')),
+        'link': item.get('permalink', ''),
         'image_link': image_link,
-        'availability': 'in_stock' if product.get('stock_status') == 'instock' else 'out_of_stock',
-        'price': f"{product.get('price', '0.00')} EUR",
-        'gender': gender,
-        'age_group': age_group,
-        'size': size,
-        'color': color,
-        'identifier_exists': 'no' if not product.get('sku') else 'yes'
+        'additional_images': additional_images,
+        'availability': 'in stock' if item.get('stock_status') == 'instock' else 'out of stock',
+        'price': f"{item.get('price', '0')} EUR",
+        'gender': extracted['gender'] or 'unisex',
+        'age_group': extracted['age_group'] or 'adult',
+        'size': extracted['size'],
+        'color': extracted['color'],
+        'material': extracted['material'],
+        'shipping_weight': shipping_weight,
+        'product_type': product_type,
+        
+        # Custom Labels Google Ads
+        'custom_label_0': extracted['gamme'],
+        'custom_label_1': extracted['work_type'],
+        'custom_label_2': extracted['public'],
+        'custom_label_3': extracted['customization'],
+        'custom_label_4': extracted['karate_weight'],
+        
+        'identifier_exists': 'no'
     }
