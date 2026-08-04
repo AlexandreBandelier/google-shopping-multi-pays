@@ -8,7 +8,7 @@ from googleapiclient.http import MediaFileUpload
 def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
     """
     Téléverse ou remplace le fichier XML dans le dossier Google Drive spécifié.
-    Fixe l'erreur de quota des Comptes de Service (storageQuotaExceeded / HttpError 403).
+    Résout les erreurs de quota des Comptes de Service.
     """
     scopes = ['https://www.googleapis.com/auth/drive']
     account_info = json.loads(service_account_json_str)
@@ -16,12 +16,11 @@ def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
     service = build('drive', 'v3', credentials=creds)
 
     filename = os.path.basename(file_path)
-
-    # 1. Échappement des caractères spéciaux
     safe_filename = filename.replace("'", "\\'")
-    query = f"'{folder_id}' in parents and name = '{safe_filename}' and trashed = false"
 
-    # 2. Recherche du fichier dans le dossier
+    # Recherche du fichier dans le dossier spécifié
+    query = f"'{folder_id}' in parents and name = '{safe_filename}' and trashed = false"
+    
     results = service.files().list(
         q=query, 
         pageSize=1, 
@@ -39,7 +38,7 @@ def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
     )
 
     if items:
-        # Fichier existant -> Mise à jour
+        # Fichier existant -> Mise à jour (Consomme le quota du propriétaire initial)
         file_id = items[0]['id']
         updated_file = service.files().update(
             fileId=file_id, 
@@ -47,17 +46,11 @@ def upload_feed_to_gdrive(file_path, folder_id, service_account_json_str):
             fields='id',
             supportsAllDrives=True
         ).execute()
-        print(f"Fichier Google Drive mis à jour (ID: {updated_file.get('id')})")
+        print(f"Fichier Google Drive mis à jour avec succès (ID: {updated_file.get('id')})")
     else:
-        # Nouveau fichier -> Création
-        file_metadata = {
-            'name': filename,
-            'parents': [folder_id]
-        }
-        created_file = service.files().create(
-            body=file_metadata, 
-            media_body=media, 
-            fields='id',
-            supportsAllDrives=True  # Prise en charge des quotas du dossier parent
-        ).execute()
-        print(f"Fichier téléversé sur Google Drive (ID: {created_file.get('id')})")
+        # Si le fichier n'est pas trouvé dans le dossier
+        raise Exception(
+            f"Le fichier '{filename}' n'existe pas encore dans le dossier Google Drive.\n"
+            "Pour éviter les erreurs de quota du Compte de Service, veuillez créer/téléverser un fichier vide nommé "
+            f"'{filename}' directement dans votre dossier Google Drive, puis relancez le workflow."
+        )
