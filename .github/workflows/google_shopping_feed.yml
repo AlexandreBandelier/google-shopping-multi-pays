@@ -1,33 +1,36 @@
-name: Generation et Export du Flux sur Google Drive
+name: Generate Google Shopping Feed
 
 on:
   schedule:
+    # Exécution chaque nuit à 02:00 UTC
     - cron: '0 2 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Permet le lancement manuel
 
 jobs:
-  generate-and-upload:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    
+    timeout-minutes: 30
 
     steps:
-    - name: Check out repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests dict2xml google-api-python-client google-auth
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Run Feed Processor Script
-      env:
-        WOO_URL: ${{ secrets.WOO_URL }}
-        WOO_KEY: ${{ secrets.WOO_KEY }}
-        WOO_SECRET: ${{ secrets.WOO_SECRET }}
-        GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-        GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-      run: python main.py
+      - name: Run Feed Generation Script
+        env:
+          WOO_URL: ${{ secrets.WOO_URL }}
+          WOO_CK: ${{ secrets.WOO_CK }}
+          WOO_CS: ${{ secrets.WOO_CS }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+        run: python main.py
