@@ -131,7 +131,7 @@ def main():
     print("Génération du fichier XML Google Shopping...")
     xml_output = generate_rss_xml(cleaned_products)
 
-    output_filename = "google_shopping_feed.xml"
+    output_filename = "Shopping Graph_feed.xml"
     with open(output_filename, "w", encoding="utf-8") as f:
         f.write(xml_output)
 
