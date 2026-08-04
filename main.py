@@ -1,13 +1,14 @@
 # main.py
 import os
 import io
+import json
 import logging
 from woocommerce import API
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from reviews_fetcher import fetch_all_product_reviews, generate_reviews_xml
 
+from reviews_fetcher import fetch_all_product_reviews, generate_reviews_xml
 from woocommerce_fetcher import fetch_all_products_with_variations
 from feed_processor import process_product_item
 
@@ -37,7 +38,7 @@ def generate_rss_xml(cleaned_products):
     buffer.write(f'    <link>{woo_url}</link>\n')
     buffer.write('    <description>Flux automatique avec déclinaisons et attributs de personnalisation</description>\n')
 
-    # Mappage des balises optionnelles (balise XML, clé dictionnaire, utilisation CDATA)
+    # Mappage des balises optionnelles standards (balise XML, clé dictionnaire, utilisation CDATA)
     optional_tags = [
         ('g:size', 'size', True),
         ('g:color', 'color', True),
@@ -68,6 +69,12 @@ def generate_rss_xml(cleaned_products):
         buffer.write(f'        <g:age_group>{prod.get("age_group", "adult")}</g:age_group>\n')
         buffer.write(f'        <g:identifier_exists>{prod.get("identifier_exists", "no")}</g:identifier_exists>\n')
 
+        # Option 1 : Ajout des balises MPN et Marque
+        if prod.get('mpn'):
+            buffer.write(f'        <g:mpn>{cdata(prod.get("mpn"))}</g:mpn>\n')
+        if prod.get('brand'):
+            buffer.write(f'        <g:brand>{cdata(prod.get("brand"))}</g:brand>\n')
+
         # Attributs optionnels standards
         for xml_tag, key, use_cdata in optional_tags:
             val = prod.get(key)
@@ -90,21 +97,18 @@ def generate_rss_xml(cleaned_products):
     buffer.close()
     return xml_content
 
-def upload_to_drive(xml_content, folder_id):
-    """Téléverse ou met à jour le fichier XML sur Google Drive."""
+def upload_to_drive(xml_content, folder_id, target_filename="Shopping Graph_feed.xml"):
+    """Téléverse ou met à jour un fichier XML spécifique sur Google Drive."""
     credentials_json = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
     if not credentials_json:
         raise ValueError("Secret GDRIVE_SERVICE_ACCOUNT_JSON manquant.")
 
-    import json
     info = json.loads(credentials_json)
     creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
     service = build("drive", "v3", credentials=creds)
 
-    filename = "Shopping Graph_feed.xml"
-    
-    # Recherche du fichier existant
-    query = f"'{folder_id}' in parents and name = '{filename}' and trashed = false"
+    # Recherche du fichier existant par son nom exact
+    query = f"'{folder_id}' in parents and name = '{target_filename}' and trashed = false"
     response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     files = response.get('files', [])
 
@@ -113,19 +117,19 @@ def upload_to_drive(xml_content, folder_id):
 
     if files:
         file_id = files[0]['id']
-        logger.info(f"Mise à jour du fichier existant sur Google Drive (ID: {file_id})...")
+        logger.info(f"Mise à jour du fichier existant sur Google Drive ({target_filename} - ID: {file_id})...")
         service.files().update(fileId=file_id, media_body=media).execute()
     else:
-        logger.info("Création d'un nouveau fichier sur Google Drive...")
-        file_metadata = {'name': filename, 'parents': [folder_id]}
+        logger.info(f"Création d'un nouveau fichier sur Google Drive ({target_filename})...")
+        file_metadata = {'name': target_filename, 'parents': [folder_id]}
         service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-    logger.info("Fichier XML mis à jour avec succès sur Google Drive.")
+    logger.info(f"Fichier {target_filename} mis à jour avec succès sur Google Drive.")
 
 def main():
     woo_url = os.getenv('WOO_URL')
-    woo_ck = os.getenv('WOO_KEY')       # Modifié pour correspondre au secret WOO_KEY
-    woo_cs = os.getenv('WOO_SECRET')    # Modifié pour correspondre au secret WOO_SECRET
+    woo_ck = os.getenv('WOO_KEY')
+    woo_cs = os.getenv('WOO_SECRET')
     folder_id = os.getenv('GDRIVE_FOLDER_ID')
 
     # Diagnostic explicite en cas de variable manquante
@@ -145,25 +149,36 @@ def main():
         consumer_key=woo_ck,
         consumer_secret=woo_cs,
         version="wc/v3",
-        timeout=30
+        timeout=60
     )
 
-    # 2. Extraction complète (Produits simples + Variations)
-    raw_products = fetch_all_products_with_variations(wcapi)
+    # 2. Carte des langues WPML -> Fichiers XML correspondants
+    target_languages = {
+        'fr': 'Shopping Graph_feed.xml',       # domaine.fr
+        'de': 'Shopping Graph_feed_DE.xml',    # domaine.de
+        'es': 'Shopping Graph_feed_ES.xml',    # domaine.es
+        'en': 'Shopping Graph_feed_EN.xml'     # domaine.com / en
+    }
 
-    # 3. Traitement et enrichissement
-    cleaned_products = [process_product_item(item) for item in raw_products]
+    # 3. Boucle d'extraction et de génération Multi-Langues
+    for lang_code, filename in target_languages.items():
+        logger.info(f"=== Début de l'extraction pour la langue : {lang_code.upper()} ===")
+        try:
+            raw_products = fetch_all_products_with_variations(wcapi, lang=lang_code)
+            cleaned_products = [process_product_item(item) for item in raw_products]
+            xml_content = generate_rss_xml(cleaned_products)
+            upload_to_drive(xml_content, folder_id, target_filename=filename)
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement de la langue {lang_code.upper()} : {e}")
 
-    # 4. Génération XML
-    xml_content = generate_rss_xml(cleaned_products)
-
-    # 5. Envoi vers Google Drive
-    upload_to_drive(xml_content, folder_id)
-
-    # Extraction & Génération Flux Avis
-    raw_reviews = fetch_all_product_reviews(wcapi)
-    xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
-    upload_to_drive(xml_reviews, folder_id, "product_reviews_feed.xml")
+    # 4. Extraction & Génération du Flux Avis Clients
+    logger.info("=== Début de l'extraction des avis clients ===")
+    try:
+        raw_reviews = fetch_all_product_reviews(wcapi)
+        xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
+        upload_to_drive(xml_reviews, folder_id, target_filename="product_reviews_feed.xml")
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement des avis clients : {e}")
 
 if __name__ == "__main__":
     main()
