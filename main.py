@@ -1,157 +1,155 @@
 # main.py
 import os
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from dict2xml import dict2xml
+import io
+import logging
+from woocommerce import API
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
-from feed_processor import enrich_and_clean_product
-from gdrive_uploader import upload_feed_to_gdrive
+from woocommerce_fetcher import fetch_all_products_with_variations
+from feed_processor import process_product_item
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def create_resilient_session():
-    """Crée une session HTTP avec retries automatiques et réutilisation des connexions."""
-    session = requests.Session()
-    retries = Retry(
-        total=5,
-        backoff_factor=1,  # Attend 1s, 2s, 4s, 8s... entre chaque essai
-        status_forcelist=[500, 502, 503, 504],
-        raise_on_status=False
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
-
-
-def fetch_all_woocommerce_products(url, key, secret):
-    """
-    Récupère la totalité du catalogue WooCommerce par pagination.
-    Optimisé via une session persistante et un filtrage strict des champs (_fields).
-    """
-    products = []
-    page = 1
-    per_page = 100
-    api_url = f"{url.rstrip('/')}/wp-json/wc/v3/products"
-    
-    session = create_resilient_session()
-
-    # 1. OPTIMISATION : Ne demander à l'API que les champs indispensables
-    fields_needed = [
-        "id", "name", "description", "permalink", "images",
-        "stock_status", "price", "categories", "attributes", "sku"
-    ]
-
-    print("Début de l'extraction du catalogue WooCommerce...")
-
-    while True:
-        params = {
-            'per_page': per_page,
-            'page': page,
-            'status': 'publish',
-            '_fields': ",".join(fields_needed)  # Réduit considérablement le poids du JSON
-        }
-        
-        # 2. OPTIMISATION : Utilisation de la session résiliente
-        response = session.get(api_url, auth=(key, secret), params=params, timeout=30)
-        
-        if response.status_code != 200:
-            raise Exception(f"Erreur API WooCommerce (Code {response.status_code}): {response.text}")
-            
-        data = response.json()
-        
-        if not data:
-            break  # Fin de la pagination
-            
-        products.extend(data)
-        print(f"  -> Page {page} récupérée ({len(products)} produits au total)")
-        page += 1
-        
-    print(f"Extraction terminée : {len(products)} produits récupérés au total.")
-    return products
-
+def cdata(value):
+    """Encapsule une valeur dans un bloc CDATA sécurisé en nettoyant la fermeture de balise."""
+    if not value:
+        return ""
+    safe_val = str(value).replace("]]>", "]]&gt;")
+    return f"<![CDATA[{safe_val}]]>"
 
 def generate_rss_xml(cleaned_products):
     """
-    Convertit la liste des produits nettoyés au format XML standard Google Shopping (RSS 2.0).
-    Formate correctement le namespace 'xmlns:g' pour éviter l'erreur "Attribute missing namespace".
+    Génère un flux XML Google Shopping RSS 2.0 complet et optimisé
+    pour supporter un grand nombre de déclinaisons sans surcharge mémoire.
     """
-    items_xml = []
-    
-    for prod in cleaned_products:
-        item_str = f"""      <item>
-        <g:id>{prod['id']}</g:id>
-        <title><![CDATA[{prod['title']}]]></title>
-        <description><![CDATA[{prod['description']}]]></description>
-        <link>{prod['link']}</link>
-        <g:image_link>{prod['image_link']}</g:image_link>
-        <g:availability>{prod['availability']}</g:availability>
-        <g:price>{prod['price']}</g:price>
-        <g:gender>{prod['gender']}</g:gender>
-        <g:age_group>{prod['age_group']}</g:age_group>
-        <g:size>{prod['size']}</g:size>
-        <g:identifier_exists>{prod['identifier_exists']}</g:identifier_exists>"""
-        
-        if prod.get('color'):
-            item_str += f"\n        <g:color>{prod['color']}</g:color>"
-            
-        item_str += "\n      </item>"
-        items_xml.append(item_str)
-
-    items_block = "\n".join(items_xml)
     woo_url = os.getenv('WOO_URL', '')
+    buffer = io.StringIO()
 
-    # Structure RSS 2.0 exacte attendue par Google Merchant Center
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
-  <channel>
-    <title>Flux Produits WooCommerce</title>
-    <link>{woo_url}</link>
-    <description>Flux automatique enrichi via Python &amp; GitHub Actions</description>
-{items_block}
-  </channel>
-</rss>"""
+    # En-tête XML standardisé Google Shopping
+    buffer.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+    buffer.write('<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">\n')
+    buffer.write('  <channel>\n')
+    buffer.write('    <title>Flux Produits WooCommerce Enrichi</title>\n')
+    buffer.write(f'    <link>{woo_url}</link>\n')
+    buffer.write('    <description>Flux automatique avec déclinaisons et attributs de personnalisation</description>\n')
 
+    # Mappage des balises optionnelles (balise XML, clé dictionnaire, utilisation CDATA)
+    optional_tags = [
+        ('g:size', 'size', True),
+        ('g:color', 'color', True),
+        ('g:material', 'material', True),
+        ('g:shipping_weight', 'shipping_weight', False),
+        ('g:product_type', 'product_type', True)
+    ]
+
+    for prod in cleaned_products:
+        buffer.write('      <item>\n')
+        buffer.write(f'        <g:id>{prod["id"]}</g:id>\n')
+        
+        if prod.get('item_group_id'):
+            buffer.write(f'        <g:item_group_id>{prod["item_group_id"]}</g:item_group_id>\n')
+
+        buffer.write(f'        <title>{cdata(prod.get("title"))}</title>\n')
+        buffer.write(f'        <description>{cdata(prod.get("description"))}</description>\n')
+        buffer.write(f'        <link>{cdata(prod.get("link"))}</link>\n')
+        buffer.write(f'        <g:image_link>{cdata(prod.get("image_link"))}</g:image_link>\n')
+
+        # Galerie d'images secondaires
+        for add_img in prod.get('additional_images', []):
+            buffer.write(f'        <g:additional_image_link>{cdata(add_img)}</g:additional_image_link>\n')
+
+        buffer.write(f'        <g:availability>{prod.get("availability", "out of stock")}</g:availability>\n')
+        buffer.write(f'        <g:price>{prod.get("price", "0 EUR")}</g:price>\n')
+        buffer.write(f'        <g:gender>{prod.get("gender", "unisex")}</g:gender>\n')
+        buffer.write(f'        <g:age_group>{prod.get("age_group", "adult")}</g:age_group>\n')
+        buffer.write(f'        <g:identifier_exists>{prod.get("identifier_exists", "no")}</g:identifier_exists>\n')
+
+        # Attributs optionnels standards
+        for xml_tag, key, use_cdata in optional_tags:
+            val = prod.get(key)
+            if val:
+                formatted_val = cdata(val) if use_cdata else val
+                buffer.write(f'        <{xml_tag}>{formatted_val}</{xml_tag}>\n')
+
+        # Custom Labels Google Ads (custom_label_0 à 4)
+        for i in range(5):
+            val = prod.get(f'custom_label_{i}')
+            if val:
+                buffer.write(f'        <g:custom_label_{i}>{cdata(val)}</g:custom_label_{i}>\n')
+
+        buffer.write('      </item>\n')
+
+    buffer.write('  </channel>\n')
+    buffer.write('</rss>')
+
+    xml_content = buffer.getvalue()
+    buffer.close()
     return xml_content
 
+def upload_to_drive(xml_content, folder_id):
+    """Téléverse ou met à jour le fichier XML sur Google Drive."""
+    credentials_json = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
+    if not credentials_json:
+        raise ValueError("Secret GDRIVE_SERVICE_ACCOUNT_JSON manquant.")
+
+    import json
+    info = json.loads(credentials_json)
+    creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
+    service = build("drive", "v3", credentials=creds)
+
+    filename = "google_shopping_feed.xml"
+    
+    # Recherche du fichier existant
+    query = f"'{folder_id}' in parents and name = '{filename}' and trashed = false"
+    response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+    files = response.get('files', [])
+
+    fh = io.BytesIO(xml_content.encode('utf-8'))
+    media = MediaIoBaseUpload(fh, mimetype='application/xml', resumable=True)
+
+    if files:
+        file_id = files[0]['id']
+        logger.info(f"Mise à jour du fichier existant sur Google Drive (ID: {file_id})...")
+        service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        logger.info("Création d'un nouveau fichier sur Google Drive...")
+        file_metadata = {'name': filename, 'parents': [folder_id]}
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+    logger.info("Fichier XML mis à jour avec succès sur Google Drive.")
 
 def main():
-    # Récupération des secrets d'environnement
     woo_url = os.getenv('WOO_URL')
-    woo_key = os.getenv('WOO_KEY')
-    woo_secret = os.getenv('WOO_SECRET')
-    gdrive_folder_id = os.getenv('GDRIVE_FOLDER_ID')
-    gdrive_json = os.getenv('GDRIVE_SERVICE_ACCOUNT_JSON')
+    woo_ck = os.getenv('WOO_CK')
+    woo_cs = os.getenv('WOO_CS')
+    folder_id = os.getenv('GDRIVE_FOLDER_ID')
 
-    if not all([woo_url, woo_key, woo_secret]):
-        raise ValueError("Erreur : Secrets WooCommerce (WOO_URL, WOO_KEY, WOO_SECRET) manquants.")
+    if not all([woo_url, woo_ck, woo_cs, folder_id]):
+        raise ValueError("Variables d'environnement WooCommerce ou Drive manquantes.")
 
-    # 1. Extraction des données WooCommerce
-    raw_products = fetch_all_woocommerce_products(woo_url, woo_key, woo_secret)
+    # 1. Initialisation de l'API WooCommerce
+    wcapi = API(
+        url=woo_url,
+        consumer_key=woo_ck,
+        consumer_secret=woo_cs,
+        version="wc/v3",
+        timeout=30
+    )
 
-    # 2. Nettoyage et enrichissement des données
-    print("Nettoyage et enrichissement des données...")
-    cleaned_products = [enrich_and_clean_product(p) for p in raw_products]
+    # 2. Extraction complète (Produits simples + Variations)
+    raw_products = fetch_all_products_with_variations(wcapi)
 
-    # 3. Génération XML
-    print("Génération du fichier XML Google Shopping...")
-    xml_output = generate_rss_xml(cleaned_products)
+    # 3. Traitement et enrichissement
+    cleaned_products = [process_product_item(item) for item in raw_products]
 
-    output_filename = "Shopping Graph_feed.xml"
-    with open(output_filename, "w", encoding="utf-8") as f:
-        f.write(xml_output)
+    # 4. Génération XML
+    xml_content = generate_rss_xml(cleaned_products)
 
-    print(f"Fichier local '{output_filename}' généré avec succès.")
-
-    # 3. OPTIMISATION : Téléversement Google Drive automatique sécurisé
-    if gdrive_folder_id and gdrive_json:
-        print("Envoi du fichier vers Google Drive...")
-        upload_feed_to_gdrive(output_filename, gdrive_folder_id, gdrive_json)
-    else:
-        print("Secrets Google Drive non détectés. Étape de téléversement ignorée.")
-
-    print("Pipeline exécuté avec succès !")
-
+    # 5. Envoi vers Google Drive
+    upload_to_drive(xml_content, folder_id)
 
 if __name__ == "__main__":
     main()
