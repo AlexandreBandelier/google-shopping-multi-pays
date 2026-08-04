@@ -6,6 +6,7 @@ from woocommerce import API
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from reviews_fetcher import fetch_all_product_reviews, generate_reviews_xml
 
 from woocommerce_fetcher import fetch_all_products_with_variations
 from feed_processor import process_product_item
