@@ -1,46 +1,33 @@
-name: Generation du Flux Google Shopping
+name: Generation et Export du Flux sur Google Drive
 
 on:
   schedule:
-    # S'exécute automatiquement chaque nuit à 2h00 du matin (UTC)
     - cron: '0 2 * * *'
-  # Permet aussi de lancer le script manuellement depuis l'interface GitHub
   workflow_dispatch:
 
 jobs:
-  generate-feed:
+  generate-and-upload:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Récupération du code source
     - name: Check out repository
       uses: actions/checkout@v4
 
-    # 2. Configuration de Python
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    # 3. Installation des dépendances via requirements.txt
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install requests dict2xml google-api-python-client google-auth
 
-    # 4. Exécution du script Python d'extraction et nettoyage
-    - name: Run Feed Processor Script
+    - name: Run Feed Generation & GDrive Upload
       env:
         WOO_URL: ${{ secrets.WOO_URL }}
         WOO_KEY: ${{ secrets.WOO_KEY }}
         WOO_SECRET: ${{ secrets.WOO_SECRET }}
+        GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
       run: python main.py
-
-    # 5. Publication / Sauvegarde du fichier XML généré
-    - name: Commit & Push generated feed XML
-      run: |
-        git config --global user.name 'GitHub Action Bot'
-        git config --global user.email 'action@github.com'
-        git add google_shopping_feed.xml
-        git commit -m "Auto-update: Flux Google Shopping généré" || exit 0
-        git push
