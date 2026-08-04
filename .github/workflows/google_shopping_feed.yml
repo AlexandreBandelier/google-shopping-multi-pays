@@ -29,8 +29,8 @@ jobs:
       - name: Run Feed Generation Script
         env:
           WOO_URL: ${{ secrets.WOO_URL }}
-          WOO_CK: ${{ secrets.WOO_CK }}
-          WOO_CS: ${{ secrets.WOO_CS }}
+          WOO_CK: ${{ secrets.WOO_KEY }}
+          WOO_CS: ${{ secrets.WOO_SECRET }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
         run: python main.py
