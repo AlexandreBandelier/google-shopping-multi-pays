@@ -223,3 +223,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+if cleaned_products:
+    sample_prod = cleaned_products[0]
+    logger.info(f"PERMALINK TEST [{target_lang}] -> ID: {sample_prod.get('id')} | URL: {sample_prod.get('link')}")
