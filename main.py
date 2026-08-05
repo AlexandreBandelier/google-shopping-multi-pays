@@ -126,13 +126,19 @@ def upload_to_drive(xml_content, folder_id, target_filename="Shopping Graph_feed
 
     logger.info(f"Fichier {target_filename} mis à jour avec succès sur Google Drive.")
 
+
 def main():
     woo_url = os.getenv('WOO_URL')
     woo_ck = os.getenv('WOO_KEY')
     woo_cs = os.getenv('WOO_SECRET')
     folder_id = os.getenv('GDRIVE_FOLDER_ID')
 
-    # Diagnostic explicite en cas de variable manquante
+    # Variables d'environnement dynamiques transmises par GitHub Matrix / Jobs
+    target_lang = os.getenv('TARGET_LANG')
+    target_file = os.getenv('TARGET_FILE')
+    generate_reviews_only = os.getenv('GENERATE_REVIEWS_ONLY')
+
+    # Diagnostic explicite en cas de variable d'environnement obligatoire manquante
     missing_vars = [var for var, val in {
         'WOO_URL': woo_url,
         'WOO_KEY': woo_ck,
@@ -143,7 +149,7 @@ def main():
     if missing_vars:
         raise ValueError(f"Variables d'environnement manquantes : {', '.join(missing_vars)}")
 
-    # 1. Initialisation de l'API WooCommerce
+    # 1. Initialisation du client API WooCommerce
     wcapi = API(
         url=woo_url,
         consumer_key=woo_ck,
@@ -152,7 +158,33 @@ def main():
         timeout=60
     )
 
-    # 2. Carte des langues WPML -> Fichiers XML correspondants
+    # CAS A : Job dédié uniquement aux Avis Clients
+    if generate_reviews_only == 'true':
+        logger.info("=== Début de l'extraction du flux Avis Clients ===")
+        try:
+            raw_reviews = fetch_all_product_reviews(wcapi)
+            xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
+            upload_to_drive(xml_reviews, folder_id, target_filename="product_reviews_feed.xml")
+        except Exception as e:
+            logger.error(f"Erreur lors du traitement des avis clients : {e}")
+            raise e
+        return
+
+    # CAS B : Job Matrix GitHub Actions (Une langue et un fichier spécifiques)
+    if target_lang and target_file:
+        logger.info(f"=== Début de l'extraction Matrix ({target_lang}) -> {target_file} ===")
+        try:
+            raw_products = fetch_all_products_with_variations(wcapi, lang=target_lang)
+            cleaned_products = [process_product_item(item) for item in raw_products]
+            xml_content = generate_rss_xml(cleaned_products)
+            upload_to_drive(xml_content, folder_id, target_filename=target_file)
+        except Exception as e:
+            logger.error(f"Erreur lors de l'extraction pour la langue {target_lang} : {e}")
+            raise e
+        return
+
+    # CAS C : Exécution locale ou séquentielle (fallback si TARGET_LANG n'est pas fourni)
+    logger.info("=== Exécution globale séquentielle (Toutes les langues) ===")
     target_languages = {
         'fr_FR': 'Shopping Graph_feed.xml',       # France (.fr)
         'fr_BE': 'Shopping Graph_feed_BE.xml',    # Belgique (.be)
@@ -164,7 +196,6 @@ def main():
         'en_GB': 'Shopping Graph_feed_EU.xml',    # Europe / Anglais (.com / .eu)
     }
 
-    # 3. Boucle d'extraction et de génération Multi-Langues
     for lang_code, filename in target_languages.items():
         logger.info(f"=== Début de l'extraction pour la langue : {lang_code.upper()} ===")
         try:
@@ -175,7 +206,7 @@ def main():
         except Exception as e:
             logger.error(f"Erreur lors du traitement de la langue {lang_code.upper()} : {e}")
 
-    # 4. Extraction & Génération du Flux Avis Clients
+    # Extraction & Génération du Flux Avis Clients dans la boucle séquentielle
     logger.info("=== Début de l'extraction des avis clients ===")
     try:
         raw_reviews = fetch_all_product_reviews(wcapi)
