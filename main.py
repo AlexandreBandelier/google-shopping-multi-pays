@@ -181,7 +181,7 @@ def main():
         logger.info(f"=== Début de l'extraction Matrix ({target_lang}) -> {target_file} ===")
         try:
             raw_products = fetch_all_products_with_variations(wcapi, lang=target_lang)
-            cleaned_products = [process_product_item(item) for item in raw_products]
+            cleaned_products = [process_product_item(item, lang=target_lang) for item in raw_products]
             xml_content = generate_rss_xml(cleaned_products)
             upload_to_drive(xml_content, folder_id, target_filename=target_file)
         except Exception as e:
