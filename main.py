@@ -63,19 +63,25 @@ def generate_rss_xml(cleaned_products):
         for add_img in prod.get('additional_images', []):
             buffer.write(f'        <g:additional_image_link>{cdata(add_img)}</g:additional_image_link>\n')
 
-        buffer.write(f'        <g:availability>{prod.get("availability", "out of stock")}</g:availability>\n')
+        # Statut de disponibilité et date de disponibilité (+20 jours si backorder)
+        availability = prod.get('availability', 'in stock')
+        buffer.write(f'        <g:availability>{availability}</g:availability>\n')
+        
+        if availability == 'backorder' and prod.get('availability_date'):
+            buffer.write(f'        <g:availability_date>{prod.get("availability_date")}</g:availability_date>\n')
+
         buffer.write(f'        <g:price>{prod.get("price", "0 EUR")}</g:price>\n')
         buffer.write(f'        <g:gender>{prod.get("gender", "unisex")}</g:gender>\n')
         buffer.write(f'        <g:age_group>{prod.get("age_group", "adult")}</g:age_group>\n')
         buffer.write(f'        <g:identifier_exists>{prod.get("identifier_exists", "no")}</g:identifier_exists>\n')
 
-        # Option 1 : Ajout des balises MPN et Marque
+        # Balises MPN et Marque
         if prod.get('mpn'):
             buffer.write(f'        <g:mpn>{cdata(prod.get("mpn"))}</g:mpn>\n')
         if prod.get('brand'):
             buffer.write(f'        <g:brand>{cdata(prod.get("brand"))}</g:brand>\n')
 
-        # Attributs optionnels standards
+        # Attributs optionnels standards (ex: g:color s'il n'était pas injecté par feed_processor)
         for xml_tag, key, use_cdata in optional_tags:
             val = prod.get(key)
             if val:
