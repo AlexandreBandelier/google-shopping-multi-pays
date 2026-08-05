@@ -154,10 +154,14 @@ def main():
 
     # 2. Carte des langues WPML -> Fichiers XML correspondants
     target_languages = {
-        'fr': 'Shopping Graph_feed.xml',       # domaine.fr
-        'de': 'Shopping Graph_feed_DE.xml',    # domaine.de
-        'es': 'Shopping Graph_feed_ES.xml',    # domaine.es
-        'en': 'Shopping Graph_feed_EN.xml'     # domaine.com / en
+        'fr': 'Shopping Graph_feed.xml',       # France (.fr)
+        'be': 'Shopping Graph_feed_BE.xml',    # Belgique (.be - Ajuster le code WPML si besoin ex: 'fr-be')
+        'de': 'Shopping Graph_feed_DE.xml',    # Allemagne (.de)
+        'es': 'Shopping Graph_feed_ES.xml',    # Espagne (.es)
+        'it': 'Shopping Graph_feed_IT.xml',    # Italie (.it)
+        'nl': 'Shopping Graph_feed_NL.xml',    # Pays-Bas (.nl)
+        'da': 'Shopping Graph_feed_DK.xml',    # Danemark (.dk - code WPML 'da')
+        'en': 'Shopping Graph_feed_EU.xml',    # Europe / Anglais (.com / .eu)
     }
 
     # 3. Boucle d'extraction et de génération Multi-Langues
