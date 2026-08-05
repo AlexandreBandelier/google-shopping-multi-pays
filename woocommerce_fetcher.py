@@ -7,7 +7,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Nombre de requêtes simultanées vers l'API WooCommerce pour les variations
-MAX_WORKERS = 5
+MAX_WORKERS = 2
 
 
 def safe_api_get(wcapi, endpoint, params=None, max_retries=3):
