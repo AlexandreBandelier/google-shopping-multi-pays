@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      fail-fast: false # Optimisation 2 : Si un pays échoue, les autres continuent !
+      fail-fast: false # Optimisation 2 : Si un pays échoue, les autres continuent
+      max-parallel: 3
       matrix:
         include:
           - lang: 'fr_FR'
