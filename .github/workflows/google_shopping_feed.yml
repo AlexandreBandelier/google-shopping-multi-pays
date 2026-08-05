@@ -4,13 +4,33 @@ on:
   schedule:
     # Exécution chaque nuit à 02:00 UTC
     - cron: '0 2 * * *'
-  workflow_dispatch: # Permet le lancement manuel
+  workflow_dispatch: # Permet le lancement manuel depuis l'interface GitHub
 
 jobs:
-  build-and-deploy:
+  generate-product-feeds:
+    name: Flux Produit - ${{ matrix.lang }}
     runs-on: ubuntu-latest
-    
     timeout-minutes: 30
+    strategy:
+      fail-fast: false # Optimisation 2 : Si un pays échoue, les autres continuent !
+      matrix:
+        include:
+          - lang: 'fr_FR'
+            file: 'Shopping Graph_feed.xml'
+          - lang: 'fr_BE'
+            file: 'Shopping Graph_feed_BE.xml'
+          - lang: 'de_DE'
+            file: 'Shopping Graph_feed_DE.xml'
+          - lang: 'es_ES'
+            file: 'Shopping Graph_feed_ES.xml'
+          - lang: 'it_IT'
+            file: 'Shopping Graph_feed_IT.xml'
+          - lang: 'nl_NL'
+            file: 'Shopping Graph_feed_NL.xml'
+          - lang: 'da_DK'
+            file: 'Shopping Graph_feed_DK.xml'
+          - lang: 'en_GB'
+            file: 'Shopping Graph_feed_EU.xml'
 
     steps:
       - name: Checkout repository
@@ -19,7 +39,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.11' # Optimisation 3 : Python 3.11 pour des performances accrues
+          cache: 'pip'           # Optimisation 1 : Mise en cache pip pour accélérer le démarrage
 
       - name: Install dependencies
         run: |
@@ -33,4 +54,35 @@ jobs:
           WOO_SECRET: ${{ secrets.WOO_SECRET }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          TARGET_LANG: ${{ matrix.lang }}
+          TARGET_FILE: ${{ matrix.file }}
+        run: python main.py
+
+  generate-reviews-feed:
+    name: Flux Avis Clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Reviews Feed Script
+        env:
+          WOO_URL: ${{ secrets.WOO_URL }}
+          WOO_KEY: ${{ secrets.WOO_KEY }}
+          WOO_SECRET: ${{ secrets.WOO_SECRET }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GENERATE_REVIEWS_ONLY: 'true'
         run: python main.py
