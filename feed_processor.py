@@ -2,22 +2,22 @@
 import html
 import re
 
-# Table de correspondance Langue -> Nom de Domaine
+# Table de correspondance Langue -> Nom de Domaine officiel
 DOMAIN_MAPPING = {
-    'fr_FR': 'https://votre-site.fr',
-    'fr_BE': 'https://votre-site.be',
-    'de_DE': 'https://votre-site.de',
-    'es_ES': 'https://votre-site.es',
-    'it_IT': 'https://votre-site.it',
-    'nl_NL': 'https://votre-site.nl',
-    'da_DK': 'https://votre-site.dk',
-    'en_GB': 'https://votre-site.eu',
+    'fr_FR': 'https://karate-gi.fr',
+    'fr_BE': 'https://karate-gi.be',
+    'de_DE': 'https://karate-gi.de',
+    'es_ES': 'https://karate-gi.es',
+    'it_IT': 'https://karate-gi.it',
+    'nl_NL': 'https://karate-gi.nl',
+    'da_DK': 'https://karate-gi.dk',
+    'en_GB': 'https://karate-gi.eu',
 }
 
 # Table de correspondance Langue -> Devise officielle Google Shopping
 CURRENCY_MAPPING = {
     'da_DK': 'DKK',
-    'en_GB': 'EUR',  # Ou GBP selon votre ciblage EU
+    'en_GB': 'EUR',
     'fr_FR': 'EUR',
     'fr_BE': 'EUR',
     'de_DE': 'EUR',
@@ -26,7 +26,7 @@ CURRENCY_MAPPING = {
     'nl_NL': 'EUR',
 }
 
-# Traduction des étiquettes personnalisées de stock
+# Traduction des étiquettes personnalisées de stock (Custom Label 4)
 STOCK_LABELS = {
     'fr_FR': {'instock': 'En Stock', 'onbackorder': 'Sur Commande', 'outofstock': 'Rupture'},
     'fr_BE': {'instock': 'En Stock', 'onbackorder': 'Sur Commande', 'outofstock': 'Rupture'},
@@ -38,18 +38,22 @@ STOCK_LABELS = {
     'en_GB': {'instock': 'In Stock', 'onbackorder': 'On Backorder', 'outofstock': 'Out of Stock'},
 }
 
+CLEAN_HTML_REGEX = re.compile(r'<[^>]+>')
+
 
 def clean_html(text):
-    """Nettoie le HTML et les espaces superflus."""
+    """Nettoie le HTML, décodes les entités et supprime les espaces superflus."""
     if not text:
         return ""
-    clean = re.sub(r'<[^>]+>', ' ', str(text))
+    text_unescaped = html.unescape(str(text))
+    clean = CLEAN_HTML_REGEX.sub(' ', text_unescaped)
     return " ".join(clean.split())
 
 
 def fix_url_domain(link, lang):
     """
-    Réécrit le nom de domaine racine pour correspondre à la langue et au TLD cible (.de, .es, .dk, etc.).
+    S'assure que le domaine racine correspond exactement au TLD cible (.de, .es, .dk...)
+    tout en préservant le chemin (slug) traduit par WPML.
     """
     if not link:
         return ""
@@ -57,24 +61,50 @@ def fix_url_domain(link, lang):
     if not target_domain:
         return link
 
-    # Remplace le protocole + nom de domaine principal par le domaine cible
+    # Remplace le protocole + domaine d'origine par le domaine spécifique du pays
     updated_link = re.sub(r'https?://[^/]+', target_domain, link)
     return updated_link
 
 
+def extract_brand(item):
+    """
+    Extrait dynamiquement la marque depuis les attributs du produit ou les marques WooCommerce.
+    """
+    # 1. Inspection des attributs WooCommerce (ex: Marque, Brand, pa_brand)
+    attributes = item.get('attributes', [])
+    for attr in attributes:
+        attr_name = str(attr.get('name', '')).lower()
+        if 'brand' in attr_name or 'marque' in attr_name:
+            options = attr.get('options', [])
+            if options:
+                return options[0]
+            elif attr.get('option'):
+                return attr.get('option')
+
+    # 2. Inspection de la taxonomie 'brands' (extensions WooCommerce Brands)
+    brands = item.get('brands', [])
+    if brands and isinstance(brands, list):
+        return brands[0].get('name', '')
+
+    return ""
+
+
 def process_product_item(item, lang="fr_FR"):
     """
-    Traite un produit simple ou une variante WooCommerce 
-    et extrait toutes les métadonnées pour Google Shopping avec adaptation multi-domaine.
+    Traite un produit simple ou une variante WooCommerce et extrait toutes 
+    les métadonnées optimisées pour Google Shopping (Multi-domaine & Multi-langue).
     """
     prod_id = str(item.get('id'))
     parent_id = item.get('parent_id')
     item_group_id = str(parent_id) if parent_id else None
 
     title = clean_html(item.get('name', ''))
-    description = clean_html(item.get('description', ''))
     
-    # 1. Correction dynamique du lien selon le domaine du pays cible (.de, .dk, .es...)
+    # Optimisation : Fallback sur la description courte si la longue est absente
+    raw_desc = item.get('description') or item.get('short_description') or ""
+    description = clean_html(raw_desc)
+    
+    # Permalien propre traduit par WPML avec mise à jour du domaine cible
     raw_link = item.get('permalink', '')
     link = fix_url_domain(raw_link, lang)
 
@@ -88,11 +118,10 @@ def process_product_item(item, lang="fr_FR"):
     price_val = item.get('price', '0')
     price = f"{price_val} {currency}" if price_val else f"0 {currency}"
 
-    # --- Stock & Availability (Incorpore l'enrichissement de woocommerce_fetcher.py) ---
+    # --- Statut de Stock & Disponibilité Google ---
     stock_status = item.get('stock_status', 'instock')
-    
-    # Prise en compte prioritaire du statut calculé par woocommerce_fetcher
     availability = item.get('calculated_availability')
+    
     if not availability:
         if stock_status == 'instock':
             availability = 'in_stock'
@@ -103,7 +132,7 @@ def process_product_item(item, lang="fr_FR"):
 
     availability_date = item.get('calculated_availability_date')
 
-    # Custom label de stock traduit selon la langue
+    # Custom Label 4 (Statut de stock traduit)
     labels_dict = STOCK_LABELS.get(lang, STOCK_LABELS['fr_FR'])
     if stock_status == 'instock':
         custom_stock_label = labels_dict['instock']
@@ -112,15 +141,15 @@ def process_product_item(item, lang="fr_FR"):
     else:
         custom_stock_label = labels_dict['outofstock']
 
-    # --- Identification MPN / Brand / SKU ---
+    # --- MPN, SKU & Marque Dynamique ---
     sku = item.get('sku') or prod_id
     mpn = str(sku)
-    brand = "VotreMarque"  # Remplacez par votre marque officielle
+    brand = extract_brand(item)
 
-    # --- Attributs & Déclinaisons (Taille, Couleur, Matière) ---
+    # --- Attributs & Déclinaisons ---
     attributes = item.get('attributes', [])
     size = None
-    color = item.get('extracted_color')  # Priorité à la couleur extraite par woocommerce_fetcher
+    color = item.get('extracted_color')
     material = None
     discipline = None
     gamme = None
@@ -163,12 +192,12 @@ def process_product_item(item, lang="fr_FR"):
         'gender': 'unisex',
         'age_group': 'adult',
         
-        # Identification MPN / Brand
-        'identifier_exists': 'no',
+        # Identification du produit
+        'identifier_exists': 'yes' if brand else 'no',
         'mpn': mpn,
         'brand': brand,
 
-        # Custom Labels Google Ads (custom_label_0 à 4)
+        # Custom Labels Google Ads
         'custom_label_0': gamme or '',
         'custom_label_1': discipline or '',
         'custom_label_2': public or '',
