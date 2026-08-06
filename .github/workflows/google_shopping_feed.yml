@@ -10,7 +10,7 @@ jobs:
   generate-product-feeds:
     name: Flux Produit - ${{ matrix.lang }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false # Optimisation 2 : Si un pays échoue, les autres continuent
       max-parallel: 3
