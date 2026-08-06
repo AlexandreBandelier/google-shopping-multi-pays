@@ -50,30 +50,16 @@ def clean_html(text):
     return " ".join(clean.split())
 
 
-# Extrait à remplacer dans feed_processor.py
-
-def fix_url_domain(link, lang):
+def get_exact_product_url(item):
     """
-    Conserve le slug traduit renvoyé par WPML et force uniquement 
-    le domaine cible du pays (.de, .es, .it...) si nécessaire.
+    Extrait le permalink canonique exact renvoyé directement par l'API du site.
     """
+    link = item.get('permalink', '').strip()
     if not link:
-        return ""
-    
-    target_domain = DOMAIN_MAPPING.get(lang)
-    if not target_domain:
-        return link
+        # Fallback au cas où le permalink direct est absent
+        link = item.get('guid', {}).get('rendered', '')
+    return link
 
-    # Si WPML renvoie une URL relative ou basée sur le domaine .fr
-    # On remplace uniquement le protocole + nom de domaine, en conservant le slug traduit
-    updated_link = re.sub(r'^https?://[^/]+', target_domain, link)
-    
-    # Nettoyage d'éventuels préfixes de langue résiduels dans l'URL si WPML utilise des sous-dossiers
-    # Ex: karate-gi.de/de/mon-produit/ -> karate-gi.de/mon-produit/
-    wpml_prefix = lang.split('_')[0]
-    updated_link = re.sub(f"{target_domain}/{wpml_prefix}/", f"{target_domain}/", updated_link)
-
-    return updated_link
 
 def extract_brand(item):
     """
@@ -113,9 +99,8 @@ def process_product_item(item, lang="fr_FR"):
     raw_desc = item.get('description') or item.get('short_description') or ""
     description = clean_html(raw_desc)
     
-    # Permalien propre traduit par WPML avec mise à jour du domaine cible
-    raw_link = item.get('permalink', '')
-    link = fix_url_domain(raw_link, lang)
+    # Récupération directe du permalien brut renvoyé par le domaine natif
+    link = get_exact_product_url(item)
 
     # --- Images ---
     images = item.get('images', [])
