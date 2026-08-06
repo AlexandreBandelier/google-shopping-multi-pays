@@ -50,21 +50,30 @@ def clean_html(text):
     return " ".join(clean.split())
 
 
+# Extrait à remplacer dans feed_processor.py
+
 def fix_url_domain(link, lang):
     """
-    S'assure que le domaine racine correspond exactement au TLD cible (.de, .es, .dk...)
-    tout en préservant le chemin (slug) traduit par WPML.
+    Conserve le slug traduit renvoyé par WPML et force uniquement 
+    le domaine cible du pays (.de, .es, .it...) si nécessaire.
     """
     if not link:
         return ""
+    
     target_domain = DOMAIN_MAPPING.get(lang)
     if not target_domain:
         return link
 
-    # Remplace le protocole + domaine d'origine par le domaine spécifique du pays
-    updated_link = re.sub(r'https?://[^/]+', target_domain, link)
-    return updated_link
+    # Si WPML renvoie une URL relative ou basée sur le domaine .fr
+    # On remplace uniquement le protocole + nom de domaine, en conservant le slug traduit
+    updated_link = re.sub(r'^https?://[^/]+', target_domain, link)
+    
+    # Nettoyage d'éventuels préfixes de langue résiduels dans l'URL si WPML utilise des sous-dossiers
+    # Ex: karate-gi.de/de/mon-produit/ -> karate-gi.de/mon-produit/
+    wpml_prefix = lang.split('_')[0]
+    updated_link = re.sub(f"{target_domain}/{wpml_prefix}/", f"{target_domain}/", updated_link)
 
+    return updated_link
 
 def extract_brand(item):
     """
