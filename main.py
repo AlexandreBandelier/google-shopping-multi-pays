@@ -182,7 +182,7 @@ def upload_to_drive(xml_content, folder_id, target_filename="Shopping Graph_feed
 
 
 def main():
-    woo_url = os.getenv("WOO_URL")
+    woo_url = os.getenv("WOO_URL", "https://karate-gi.fr")
     woo_ck = os.getenv("WOO_KEY")
     woo_cs = os.getenv("WOO_SECRET")
     folder_id = os.getenv("GDRIVE_FOLDER_ID")
@@ -194,7 +194,6 @@ def main():
     missing_vars = [
         var
         for var, val in {
-            "WOO_URL": woo_url,
             "WOO_KEY": woo_ck,
             "WOO_SECRET": woo_cs,
             "GDRIVE_FOLDER_ID": folder_id,
@@ -207,19 +206,18 @@ def main():
             f"Variables d'environnement manquantes : {', '.join(missing_vars)}"
         )
 
-    wcapi = API(
-        url=woo_url,
-        consumer_key=woo_ck,
-        consumer_secret=woo_cs,
-        version="wc/v3",
-        timeout=60,
-    )
-
-    # CAS A : Avis Clients Uniquement
+    # CAS A : Avis Clients Uniquement (utilise le domaine principal)
     if generate_reviews_only == "true":
         logger.info("=== Début de l'extraction du flux Avis Clients ===")
+        wcapi_default = API(
+            url=woo_url,
+            consumer_key=woo_ck,
+            consumer_secret=woo_cs,
+            version="wc/v3",
+            timeout=60,
+        )
         try:
-            raw_reviews = fetch_all_product_reviews(wcapi)
+            raw_reviews = fetch_all_product_reviews(wcapi_default)
             xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
             upload_to_drive(
                 xml_reviews, folder_id, target_filename="product_reviews_feed.xml"
@@ -232,9 +230,23 @@ def main():
     # CAS B : Job Matrix GitHub Actions (Une langue spécifique)
     if target_lang:
         filename = target_file or DOMAIN_CONFIG.get(target_lang, {}).get("file", "Shopping Graph_feed.xml")
-        logger.info(f"=== Début de l'extraction Matrix ({target_lang}) -> {filename} ===")
+        
+        # OBTENIR LE DOMAINE EXACT POUR LA LANGUE CIBLÉE (ex: https://karate-gi.dk pour da_DK)
+        target_domain = DOMAIN_CONFIG.get(target_lang, {}).get("domain", woo_url)
+
+        logger.info(f"=== Début de l'extraction Matrix ({target_lang}) sur {target_domain} -> {filename} ===")
+        
+        # ON INITIALISE L'API DIRECTEMENT SUR LE DOMAINE RACINE DU PAYS
+        wcapi_target = API(
+            url=target_domain,
+            consumer_key=woo_ck,
+            consumer_secret=woo_cs,
+            version="wc/v3",
+            timeout=60,
+        )
+
         try:
-            raw_products = fetch_all_products_with_variations(wcapi, lang=target_lang)
+            raw_products = fetch_all_products_with_variations(wcapi_target, lang=target_lang)
             cleaned_products = [
                 process_product_item(item, lang=target_lang) for item in raw_products
             ]
@@ -259,9 +271,21 @@ def main():
     logger.info("=== Exécution globale séquentielle (Toutes les langues) ===")
     for lang_code, config in DOMAIN_CONFIG.items():
         filename = config["file"]
-        logger.info(f"=== Début de l'extraction pour la langue : {lang_code.upper()} ===")
+        site_domain = config["domain"]
+
+        logger.info(f"=== Début de l'extraction pour {lang_code.upper()} sur {site_domain} ===")
+        
+        # ON INITIALISE L'API SUR LE DOMAINE DE CHAQUE PAYS
+        wcapi_site = API(
+            url=site_domain,
+            consumer_key=woo_ck,
+            consumer_secret=woo_cs,
+            version="wc/v3",
+            timeout=60,
+        )
+
         try:
-            raw_products = fetch_all_products_with_variations(wcapi, lang=lang_code)
+            raw_products = fetch_all_products_with_variations(wcapi_site, lang=lang_code)
             cleaned_products = [
                 process_product_item(item, lang=lang_code) for item in raw_products
             ]
@@ -274,8 +298,15 @@ def main():
 
     # Extraction & Génération du Flux Avis Clients à la fin du process global
     logger.info("=== Début de l'extraction des avis clients ===")
+    wcapi_default = API(
+        url=woo_url,
+        consumer_key=woo_ck,
+        consumer_secret=woo_cs,
+        version="wc/v3",
+        timeout=60,
+    )
     try:
-        raw_reviews = fetch_all_product_reviews(wcapi)
+        raw_reviews = fetch_all_product_reviews(wcapi_default)
         xml_reviews = generate_reviews_xml(raw_reviews, woo_url)
         upload_to_drive(
             xml_reviews, folder_id, target_filename="product_reviews_feed.xml"
