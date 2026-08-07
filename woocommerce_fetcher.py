@@ -37,7 +37,13 @@ def fetch_all_products_with_variations(wcapi, lang="fr"):
     en passant impérativement le filtre de langue WPML.
     """
     # Extraction du code court de langue pour WPML (ex: 'es_ES' -> 'es', 'de_DE' -> 'de')
-    wpml_lang = lang.split("_")[0] if "_" in lang else lang
+    # GESTION SPÉCIFIQUE WPML :
+    # Si c'est le site Belge, on transmet 'fr_BE' pour éviter la redirection vers karate-gi.fr
+    if lang == "fr_BE":
+        wpml_lang = "fr_BE"
+    else:
+        # Pour TOUTES les autres langues (es_ES -> es, de_DE -> de, etc.) : inchangé
+        wpml_lang = lang.split("_")[0] if "_" in lang else lang
 
     all_products = []
     page = 1
