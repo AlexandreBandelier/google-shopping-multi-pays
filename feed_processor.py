@@ -28,11 +28,51 @@ STOCK_LABELS = {
     'en_GB': {'instock': 'In Stock', 'onbackorder': 'On Backorder', 'outofstock': 'Out of Stock'},
 }
 
+# Valeurs de secours (fallbacks) traduites selon la langue cible
+FALLBACK_VALUES = {
+    'fr_FR': {'color': 'Blanc', 'size': 'Taille Unique'},
+    'fr_BE': {'color': 'Blanc', 'size': 'Taille Unique'},
+    'de_DE': {'color': 'Weiß', 'size': 'Einheitsgröße'},
+    'es_ES': {'color': 'Blanco', 'size': 'Talla Única'},
+    'it_IT': {'color': 'Bianco', 'size': 'Taglia Unica'},
+    'nl_NL': {'color': 'Wit', 'size': 'Eén maat'},
+    'da_DK': {'color': 'Hvid', 'size': 'One Size'},
+    'en_GB': {'color': 'White', 'size': 'One Size'},
+}
+
+# Lookup table d'attributs pour une recherche directe et rapide O(1)
+KEYWORD_MAPPING = {
+    # Taille
+    'taille': 'size', 'size': 'size', 'groesse': 'size', 'grösse': 'size', 'pa_taille': 'size', 'pa_size': 'size',
+    # Couleur
+    'couleur': 'color', 'color': 'color', 'farbe': 'color', 'pa_couleur': 'color', 'pa_color': 'color', 'pa_farbe': 'color',
+    # Matière
+    'matière': 'material', 'matiere': 'material', 'tissu': 'material', 'material': 'material',
+    # Discipline
+    'discipline': 'discipline', 'usage': 'discipline',
+    # Autres
+    'gamme': 'gamme',
+    'public': 'public', 'niveau': 'public',
+    'personnalisation': 'personnalisation', 'broderie': 'personnalisation',
+}
+
 CLEAN_HTML_REGEX = re.compile(r'<[^>]+>')
 
 def clean_html(text):
     if not text: return ""
     return " ".join(CLEAN_HTML_REGEX.sub(' ', html.unescape(str(text))).split())
+
+def format_shipping_weight(raw_weight):
+    """Assainit la valeur numérique du poids avant d'ajouter l'unité kg."""
+    if not raw_weight:
+        return ""
+    clean_val = str(raw_weight).replace(',', '.').strip()
+    match = re.search(r'^\d+(\.\d+)?', clean_val)
+    if match:
+        weight_num = float(match.group(0))
+        if weight_num > 0:
+            return f"{weight_num} kg"
+    return ""
 
 def get_exact_product_url(item):
     return item.get('permalink', '').strip() or item.get('guid', {}).get('rendered', '')
@@ -45,7 +85,7 @@ def extract_brand(item):
     return brands[0].get('name', '') if isinstance(brands, list) and brands else ""
 
 def resolve_availability(stock_status, calculated_availability, calculated_date):
-    """Optimisation 2 : Centralisation de la logique de stock."""
+    """Centralisation de la logique de stock et de la date de réassort (J+15)."""
     if calculated_availability:
         availability = calculated_availability
     else:
@@ -55,23 +95,36 @@ def resolve_availability(stock_status, calculated_availability, calculated_date)
     availability_date = calculated_date
     if availability in ['backorder', 'preorder'] and not availability_date:
         availability_date = (datetime.now() + timedelta(days=15)).strftime("%Y-%m-%dT00:00:00+0200")
-    
+
     return availability, availability_date
 
-def get_attribute_data(attributes, color):
-    """Optimisation 1 : Helper pour extraire les attributs."""
-    data = {'size': None, 'color': color, 'material': None, 'discipline': None, 'gamme': None, 'public': None, 'personnalisation': None}
-    
+def get_attribute_data(attributes, color, lang="fr_FR"):
+    """Extraction optimisée des attributs avec fallbacks traduits."""
+    data = {
+        'size': None, 'color': color, 'material': None,
+        'discipline': None, 'gamme': None, 'public': None,
+        'personnalisation': None
+    }
+
     for attr in attributes:
-        name = str(attr.get('name', '')).lower()
-        val = attr.get('option', '')
-        if 'taille' in name or 'size' in name: data['size'] = val
-        elif ('couleur' in name or 'color' in name) and not data['color']: data['color'] = val
-        elif 'matière' in name or 'tissu' in name or 'material' in name: data['material'] = val
-        elif 'discipline' in name or 'usage' in name: data['discipline'] = val
-        elif 'gamme' in name: data['gamme'] = val
-        elif 'public' in name or 'niveau' in name: data['public'] = val
-        elif 'personnalisation' in name or 'broderie' in name: data['personnalisation'] = val
+        name = str(attr.get('name', '')).lower().strip()
+        val = attr.get('option') or (attr.get('options')[0] if attr.get('options') else '')
+
+        if not val:
+            continue
+
+        for keyword, target_key in KEYWORD_MAPPING.items():
+            if keyword in name and not data[target_key]:
+                data[target_key] = val
+                break
+
+    # Valeurs de secours dynamiques selon la langue
+    lang_fallbacks = FALLBACK_VALUES.get(lang, FALLBACK_VALUES['fr_FR'])
+    if not data['color']:
+        data['color'] = lang_fallbacks['color']
+    if not data['size']:
+        data['size'] = lang_fallbacks['size']
+
     return data
 
 def process_product_item(item, lang="fr_FR"):
@@ -79,7 +132,10 @@ def process_product_item(item, lang="fr_FR"):
     prod_id = str(item.get('id'))
     title = clean_html(item.get('name', ''))
     description = clean_html(item.get('description') or item.get('short_description') or "")
-    
+
+    # Poids pour la livraison nettoyé et formaté
+    shipping_weight = format_shipping_weight(item.get('weight'))
+
     # Stock et Disponibilité
     availability, availability_date = resolve_availability(
         item.get('stock_status', 'instock'), 
@@ -87,13 +143,13 @@ def process_product_item(item, lang="fr_FR"):
         item.get('calculated_availability_date')
     )
 
-    # Optimisation 3 : Mapping direct des labels
+    # Mapping direct des labels de stock
     labels = STOCK_LABELS.get(lang, STOCK_LABELS['fr_FR'])
     stock_status = item.get('stock_status', 'instock')
     label_key = 'onbackorder' if stock_status in ['onbackorder', 'backorder'] else ('instock' if stock_status == 'instock' else 'outofstock')
-    
-    # Attributs
-    attr_data = get_attribute_data(item.get('attributes', []), item.get('extracted_color'))
+
+    # Attributs avec support de la langue pour les fallbacks
+    attr_data = get_attribute_data(item.get('attributes', []), item.get('extracted_color'), lang)
     brand = extract_brand(item)
 
     return {
@@ -106,6 +162,7 @@ def process_product_item(item, lang="fr_FR"):
         'availability': availability,
         'availability_date': availability_date,
         'price': f"{item.get('price', '0')} {CURRENCY_MAPPING.get(lang, 'EUR')}",
+        'shipping_weight': shipping_weight,
         **attr_data,
         'gender': 'unisex', 'age_group': 'adult',
         'identifier_exists': 'yes' if brand else 'no',
