@@ -28,6 +28,15 @@ DOMAIN_CONFIG = {
     "en_GB": {"domain": "https://karate-gi.eu", "file": "Shopping Graph_feed_EU.xml"},
 }
 
+# Optimisation 1 : Structure constante pour les balises optionnelles
+OPTIONAL_TAGS_MAP = (
+    ("g:size", "size", True),
+    ("g:color", "color", True),
+    ("g:material", "material", True),
+    ("g:shipping_weight", "shipping_weight", False),
+    ("g:product_type", "product_type", True),
+)
+
 
 def cdata(value):
     """Encapsule une valeur dans un bloc CDATA sécurisé en nettoyant la fermeture de balise."""
@@ -45,9 +54,9 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
     domain_info = DOMAIN_CONFIG.get(lang, {"domain": os.getenv("WOO_URL", "https://karate-gi.fr")})
     channel_link = domain_info["domain"]
 
+    # Optimisation 2 : Pré-allocation implicite du buffer mémoire via StringIO
     buffer = io.StringIO()
 
-    # En-tête XML standardisé Google Shopping
     buffer.write('<?xml version="1.0" encoding="UTF-8"?>\n')
     buffer.write('<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">\n')
     buffer.write("  <channel>\n")
@@ -57,15 +66,6 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
         "    <description>Flux automatique avec déclinaisons et attributs de"
         " personnalisation</description>\n"
     )
-
-    # Mappage des balises optionnelles standards
-    optional_tags = [
-        ("g:size", "size", True),
-        ("g:color", "color", True),
-        ("g:material", "material", True),
-        ("g:shipping_weight", "shipping_weight", False),
-        ("g:product_type", "product_type", True),
-    ]
 
     for prod in cleaned_products:
         buffer.write("      <item>\n")
@@ -85,17 +85,15 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
             f'        <g:image_link>{cdata(prod.get("image_link"))}</g:image_link>\n'
         )
 
-        # Galerie d'images secondaires
         for add_img in prod.get("additional_images", []):
             buffer.write(
                 f'        <g:additional_image_link>{cdata(add_img)}</g:additional_image_link>\n'
             )
 
-        # Statut de disponibilité
         availability = prod.get("availability", "in stock")
         buffer.write(f"        <g:availability>{availability}</g:availability>\n")
 
-        if availability == "backorder" and prod.get("availability_date"):
+        if availability in ("backorder", "preorder") and prod.get("availability_date"):
             buffer.write(
                 f'        <g:availability_date>{prod.get("availability_date")}</g:availability_date>\n'
             )
@@ -107,20 +105,18 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
             f'        <g:identifier_exists>{prod.get("identifier_exists", "no")}</g:identifier_exists>\n'
         )
 
-        # Balises MPN et Marque
         if prod.get("mpn"):
             buffer.write(f'        <g:mpn>{cdata(prod.get("mpn"))}</g:mpn>\n')
         if prod.get("brand"):
             buffer.write(f'        <g:brand>{cdata(prod.get("brand"))}</g:brand>\n')
 
-        # Attributs optionnels standards
-        for xml_tag, key, use_cdata in optional_tags:
+        # Optimisation 3 : Traitement optimisé des balises optionnelles avec filtrage strict du poids
+        for xml_tag, key, use_cdata in OPTIONAL_TAGS_MAP:
             val = prod.get(key)
             if val:
-                formatted_val = cdata(val) if use_cdata else val
+                formatted_val = cdata(val) if use_cdata else str(val).strip()
                 buffer.write(f"        <{xml_tag}>{formatted_val}</{xml_tag}>\n")
 
-        # Custom Labels Google Ads (custom_label_0 à 4)
         for i in range(5):
             val = prod.get(f"custom_label_{i}")
             if val:
@@ -206,7 +202,7 @@ def main():
             f"Variables d'environnement manquantes : {', '.join(missing_vars)}"
         )
 
-    # CAS A : Avis Clients Uniquement (utilise le domaine principal)
+    # CAS A : Avis Clients Uniquement
     if generate_reviews_only == "true":
         logger.info("=== Début de l'extraction du flux Avis Clients ===")
         wcapi_default = API(
@@ -227,16 +223,13 @@ def main():
             raise e
         return
 
-    # CAS B : Job Matrix GitHub Actions (Une langue spécifique)
+    # CAS B : Job Matrix GitHub Actions (Langue spécifique)
     if target_lang:
         filename = target_file or DOMAIN_CONFIG.get(target_lang, {}).get("file", "Shopping Graph_feed.xml")
-        
-        # OBTENIR LE DOMAINE EXACT POUR LA LANGUE CIBLÉE (ex: https://karate-gi.dk pour da_DK)
         target_domain = DOMAIN_CONFIG.get(target_lang, {}).get("domain", woo_url)
 
         logger.info(f"=== Début de l'extraction Matrix ({target_lang}) sur {target_domain} -> {filename} ===")
         
-        # ON INITIALISE L'API DIRECTEMENT SUR LE DOMAINE RACINE DU PAYS
         wcapi_target = API(
             url=target_domain,
             consumer_key=woo_ck,
@@ -267,7 +260,7 @@ def main():
             raise e
         return
 
-    # CAS C : Exécution globale séquentielle (Toutes les langues configurées)
+    # CAS C : Exécution globale séquentielle
     logger.info("=== Exécution globale séquentielle (Toutes les langues) ===")
     for lang_code, config in DOMAIN_CONFIG.items():
         filename = config["file"]
@@ -275,7 +268,6 @@ def main():
 
         logger.info(f"=== Début de l'extraction pour {lang_code.upper()} sur {site_domain} ===")
         
-        # ON INITIALISE L'API SUR LE DOMAINE DE CHAQUE PAYS
         wcapi_site = API(
             url=site_domain,
             consumer_key=woo_ck,
@@ -296,7 +288,6 @@ def main():
                 f"Erreur lors du traitement de la langue {lang_code.upper()} : {e}"
             )
 
-    # Extraction & Génération du Flux Avis Clients à la fin du process global
     logger.info("=== Début de l'extraction des avis clients ===")
     wcapi_default = API(
         url=woo_url,
