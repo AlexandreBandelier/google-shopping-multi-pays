@@ -152,13 +152,18 @@ def process_product_item(item, lang="fr_FR"):
     attr_data = get_attribute_data(item.get('attributes', []), item.get('extracted_color'), lang)
     brand = extract_brand(item)
 
+    # Extraction sécurisée des images (évite IndexError si la liste est vide)
+    images = item.get('images', [])
+    image_link = images[0].get('src', '') if images and isinstance(images, list) else ''
+    additional_images = [img.get('src') for img in images[1:] if isinstance(img, dict) and img.get('src')] if len(images) > 1 else []
+
     return {
         'id': prod_id,
         'item_group_id': str(item.get('parent_id')) if item.get('parent_id') else None,
         'title': title, 'description': description,
         'link': get_exact_product_url(item),
-        'image_link': item.get('images', [{}])[0].get('src', ''),
-        'additional_images': [img.get('src') for img in item.get('images', [])[1:] if img.get('src')],
+        'image_link': image_link,
+        'additional_images': additional_images,
         'availability': availability,
         'availability_date': availability_date,
         'price': f"{item.get('price', '0')} {CURRENCY_MAPPING.get(lang, 'EUR')}",
