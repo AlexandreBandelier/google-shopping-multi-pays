@@ -56,18 +56,52 @@ KEYWORD_MAPPING = {
     'personnalisation': 'personnalisation', 'broderie': 'personnalisation',
 }
 
+# --- Optimisation 1 : Compilation préalable des regex et mots-clés parasites en set ---
 CLEAN_HTML_REGEX = re.compile(r'<[^>]+>')
+WEIGHT_REGEX = re.compile(r'^\d+(\.\d+)?')
+INVALID_TITLE_KEYWORDS = {
+    'habituellement expédié', 'en stock', 'sur commande', 'rupture', 
+    'auf lager', 'in stock', 'out of stock', 'bajo pedido'
+}
 
 def clean_html(text):
     if not text: return ""
     return " ".join(CLEAN_HTML_REGEX.sub(' ', html.unescape(str(text))).split())
 
+def is_invalid_title(title_text):
+    """Détecte si un titre est en réalité une phrase de stock (Recherche O(N) optimisée via any)."""
+    if not title_text:
+        return True
+    low_text = title_text.lower()
+    return any(keyword in low_text for keyword in INVALID_TITLE_KEYWORDS)
+
+def extract_clean_title(item):
+    """Extrait le vrai titre du produit en évitant les textes parasites de stock."""
+    # Ordre de priorité des clés WooCommerce pour le titre
+    candidates = [
+        item.get('name'),
+        item.get('title'),
+        item.get('post_title'),
+        item.get('slug', '').replace('-', ' ').title() if item.get('slug') else None
+    ]
+    
+    for candidate in candidates:
+        if candidate and isinstance(candidate, str):
+            cleaned = clean_html(candidate)
+            if cleaned and not is_invalid_title(cleaned):
+                return cleaned
+                
+    # Fallback ultime (conserve le comportement par défaut)
+    raw_name = item.get('name') or item.get('title') or f"Produit {item.get('id')}"
+    return clean_html(raw_name)
+
 def format_shipping_weight(raw_weight):
     """Assainit la valeur numérique du poids avant d'ajouter l'unité kg."""
     if not raw_weight:
         return ""
+    # Optimisation 2 : Remplacement optimisé et utilisation du regex pré-compilé
     clean_val = str(raw_weight).replace(',', '.').strip()
-    match = re.search(r'^\d+(\.\d+)?', clean_val)
+    match = WEIGHT_REGEX.search(clean_val)
     if match:
         weight_num = float(match.group(0))
         if weight_num > 0:
@@ -106,8 +140,12 @@ def get_attribute_data(attributes, color, lang="fr_FR"):
         'personnalisation': None
     }
 
+    # Optimisation 3 : Éviter l'évaluation de chaine vide multiple dans la boucle attributs
     for attr in attributes:
-        name = str(attr.get('name', '')).lower().strip()
+        name_raw = attr.get('name')
+        if not name_raw: continue
+        name = str(name_raw).lower().strip()
+        
         val = attr.get('option') or (attr.get('options')[0] if attr.get('options') else '')
 
         if not val:
@@ -130,7 +168,7 @@ def get_attribute_data(attributes, color, lang="fr_FR"):
 def process_product_item(item, lang="fr_FR"):
     # Données de base
     prod_id = str(item.get('id'))
-    title = clean_html(item.get('name', ''))
+    title = extract_clean_title(item)  # Application du nettoyage de titre
     description = clean_html(item.get('description') or item.get('short_description') or "")
 
     # Poids pour la livraison nettoyé et formaté
