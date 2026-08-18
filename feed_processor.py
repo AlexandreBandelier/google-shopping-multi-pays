@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 import html
 import re
 
-# Table de correspondance Langue -> Nom de Domaine officiel
 DOMAIN_MAPPING = {
     'fr_FR': 'https://karate-gi.fr', 'fr_BE': 'https://karate-gi.be',
     'de_DE': 'https://karate-gi.de', 'es_ES': 'https://karate-gi.es',
@@ -28,7 +27,6 @@ STOCK_LABELS = {
     'en_GB': {'instock': 'In Stock', 'onbackorder': 'On Backorder', 'outofstock': 'Out of Stock'},
 }
 
-# Valeurs de secours (fallbacks) traduites selon la langue cible
 FALLBACK_VALUES = {
     'fr_FR': {'color': 'Blanc', 'size': 'Taille Unique'},
     'fr_BE': {'color': 'Blanc', 'size': 'Taille Unique'},
@@ -40,50 +38,53 @@ FALLBACK_VALUES = {
     'en_GB': {'color': 'White', 'size': 'One Size'},
 }
 
-# Lookup table d'attributs pour une recherche directe et rapide O(1)
 KEYWORD_MAPPING = {
-    # Taille
     'taille': 'size', 'size': 'size', 'groesse': 'size', 'grösse': 'size', 'pa_taille': 'size', 'pa_size': 'size',
-    # Couleur
     'couleur': 'color', 'color': 'color', 'farbe': 'color', 'pa_couleur': 'color', 'pa_color': 'color', 'pa_farbe': 'color',
-    # Matière
     'matière': 'material', 'matiere': 'material', 'tissu': 'material', 'material': 'material',
-    # Discipline
     'discipline': 'discipline', 'usage': 'discipline',
-    # Autres
     'gamme': 'gamme',
     'public': 'public', 'niveau': 'public',
     'personnalisation': 'personnalisation', 'broderie': 'personnalisation',
 }
 
-# --- Optimisation 1 : Compilation préalable des regex et mots-clés parasites en set ---
+# Optimisation 1 : Pré-compilation stricte pour des performances maximales
 CLEAN_HTML_REGEX = re.compile(r'<[^>]+>')
 WEIGHT_REGEX = re.compile(r'^\d+(\.\d+)?')
-INVALID_TITLE_KEYWORDS = {
-    'habituellement expédié', 'en stock', 'sur commande', 'rupture', 
-    'auf lager', 'in stock', 'out of stock', 'bajo pedido'
-}
+# Regex optimisée pour détecter rapidement les titres invalides de type "statut de stock"
+INVALID_TITLE_REGEX = re.compile(
+    r'(habituellement expédié|en stock|sur commande|rupture|auf lager|in stock|out of stock|bajo pedido)',
+    re.IGNORECASE
+)
 
 def clean_html(text):
+    """Optimisation 2 : Echappement uniquement si le texte contient du HTML."""
     if not text: return ""
-    return " ".join(CLEAN_HTML_REGEX.sub(' ', html.unescape(str(text))).split())
+    text_str = str(text)
+    if '<' in text_str or '&' in text_str:
+        return " ".join(CLEAN_HTML_REGEX.sub(' ', html.unescape(text_str)).split())
+    return " ".join(text_str.split())
 
 def is_invalid_title(title_text):
-    """Détecte si un titre est en réalité une phrase de stock (Recherche O(N) optimisée via any)."""
     if not title_text:
         return True
-    low_text = title_text.lower()
-    return any(keyword in low_text for keyword in INVALID_TITLE_KEYWORDS)
+    return bool(INVALID_TITLE_REGEX.search(title_text))
 
 def extract_clean_title(item):
-    """Extrait le vrai titre du produit en évitant les textes parasites de stock."""
-    # Ordre de priorité des clés WooCommerce pour le titre
-    candidates = [
+    """Extrait le titre du produit en priorité depuis le parent pour homogénéiser la série."""
+    parent_name = item.get('parent_name')
+    if parent_name:
+        cleaned_parent = clean_html(parent_name)
+        if cleaned_parent and not is_invalid_title(cleaned_parent):
+            return cleaned_parent
+
+    # L'utilisation d'un générateur retarde l'évaluation (Lazy evaluation) pour gagner en vitesse
+    candidates = (
         item.get('name'),
         item.get('title'),
         item.get('post_title'),
         item.get('slug', '').replace('-', ' ').title() if item.get('slug') else None
-    ]
+    )
     
     for candidate in candidates:
         if candidate and isinstance(candidate, str):
@@ -91,15 +92,12 @@ def extract_clean_title(item):
             if cleaned and not is_invalid_title(cleaned):
                 return cleaned
                 
-    # Fallback ultime (conserve le comportement par défaut)
     raw_name = item.get('name') or item.get('title') or f"Produit {item.get('id')}"
     return clean_html(raw_name)
 
 def format_shipping_weight(raw_weight):
-    """Assainit la valeur numérique du poids avant d'ajouter l'unité kg."""
     if not raw_weight:
         return ""
-    # Optimisation 2 : Remplacement optimisé et utilisation du regex pré-compilé
     clean_val = str(raw_weight).replace(',', '.').strip()
     match = WEIGHT_REGEX.search(clean_val)
     if match:
@@ -112,14 +110,21 @@ def get_exact_product_url(item):
     return item.get('permalink', '').strip() or item.get('guid', {}).get('rendered', '')
 
 def extract_brand(item):
+    """Optimisation 3 : Résolution rapide de la marque et sortie prématurée."""
     for attr in item.get('attributes', []):
-        if 'brand' in str(attr.get('name', '')).lower() or 'marque' in str(attr.get('name', '')).lower():
-            return attr.get('options', [None])[0] or attr.get('option', '')
-    brands = item.get('brands', [])
-    return brands[0].get('name', '') if isinstance(brands, list) and brands else ""
+        name = str(attr.get('name', '')).lower()
+        if 'brand' in name or 'marque' in name:
+            options = attr.get('options')
+            if options and isinstance(options, list):
+                return options[0]
+            return attr.get('option', '')
+            
+    brands = item.get('brands')
+    if brands and isinstance(brands, list):
+        return brands[0].get('name', '')
+    return ""
 
 def resolve_availability(stock_status, calculated_availability, calculated_date):
-    """Centralisation de la logique de stock et de la date de réassort (J+15)."""
     if calculated_availability:
         availability = calculated_availability
     else:
@@ -133,14 +138,12 @@ def resolve_availability(stock_status, calculated_availability, calculated_date)
     return availability, availability_date
 
 def get_attribute_data(attributes, color, lang="fr_FR"):
-    """Extraction optimisée des attributs avec fallbacks traduits."""
     data = {
         'size': None, 'color': color, 'material': None,
         'discipline': None, 'gamme': None, 'public': None,
         'personnalisation': None
     }
 
-    # Optimisation 3 : Éviter l'évaluation de chaine vide multiple dans la boucle attributs
     for attr in attributes:
         name_raw = attr.get('name')
         if not name_raw: continue
@@ -156,7 +159,6 @@ def get_attribute_data(attributes, color, lang="fr_FR"):
                 data[target_key] = val
                 break
 
-    # Valeurs de secours dynamiques selon la langue
     lang_fallbacks = FALLBACK_VALUES.get(lang, FALLBACK_VALUES['fr_FR'])
     if not data['color']:
         data['color'] = lang_fallbacks['color']
@@ -166,31 +168,25 @@ def get_attribute_data(attributes, color, lang="fr_FR"):
     return data
 
 def process_product_item(item, lang="fr_FR"):
-    # Données de base
     prod_id = str(item.get('id'))
-    title = extract_clean_title(item)  # Application du nettoyage de titre
+    title = extract_clean_title(item)  
     description = clean_html(item.get('description') or item.get('short_description') or "")
 
-    # Poids pour la livraison nettoyé et formaté
     shipping_weight = format_shipping_weight(item.get('weight'))
 
-    # Stock et Disponibilité
     availability, availability_date = resolve_availability(
         item.get('stock_status', 'instock'), 
         item.get('calculated_availability'), 
         item.get('calculated_availability_date')
     )
 
-    # Mapping direct des labels de stock
     labels = STOCK_LABELS.get(lang, STOCK_LABELS['fr_FR'])
     stock_status = item.get('stock_status', 'instock')
     label_key = 'onbackorder' if stock_status in ['onbackorder', 'backorder'] else ('instock' if stock_status == 'instock' else 'outofstock')
 
-    # Attributs avec support de la langue pour les fallbacks
     attr_data = get_attribute_data(item.get('attributes', []), item.get('extracted_color'), lang)
     brand = extract_brand(item)
 
-    # Extraction sécurisée des images (évite IndexError si la liste est vide)
     images = item.get('images', [])
     image_link = images[0].get('src', '') if images and isinstance(images, list) else ''
     additional_images = [img.get('src') for img in images[1:] if isinstance(img, dict) and img.get('src')] if len(images) > 1 else []
