@@ -9,12 +9,11 @@ from woocommerce_fetcher import safe_api_get
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Regex pré-compilées pour le nettoyage
+# Regex et constantes pré-compilées pour le nettoyage et l'optimisation
 CLEAN_HTML_REGEX = re.compile(r"<[^>]+>")
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
-PHONE_REGEX = re.compile(
-    r"(\+?\d{1,3}[-.\s]?)?(\(?\d{2,4}\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}"
-)
+PHONE_REGEX = re.compile(r"(\+?\d{1,3}[-.\s]?)?(\(?\d{2,4}\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}")
+GTIN_KEYS = {"gtin", "ean", "_gtin", "_ean", "barcode"}  # Set pour recherche O(1)
 
 
 def fetch_all_product_reviews(wcapi):
@@ -43,7 +42,7 @@ def fetch_all_product_reviews(wcapi):
 
 
 def format_iso_timestamp(date_string):
-    """Convertit la date WooCommerce au format ISO 8601 strict (ex: 2026-08-05T10:00:00Z)."""
+    """Convertit la date WooCommerce au format ISO 8601 strict."""
     if not date_string:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -55,7 +54,7 @@ def format_iso_timestamp(date_string):
 
 
 def sanitize_text(text):
-    """Nettoie le HTML, échappe CDATA et masque les informations personnelles (PII) telles que les emails et numéros de téléphone."""
+    """Nettoie le HTML, échappe CDATA et masque les PII (emails et téléphones)."""
     if not text:
         return ""
 
@@ -70,16 +69,33 @@ def sanitize_text(text):
     return clean_text
 
 
+def extract_gtin_from_review(rev):
+    """Tente de récupérer un code EAN/GTIN depuis la payload de l'avis si présent."""
+    return next(
+        (
+            str(meta.get("value", "")).strip()
+            for meta in rev.get("meta_data", [])
+            if str(meta.get("key", "")).lower() in GTIN_KEYS and str(meta.get("value", "")).strip()
+        ),
+        None,
+    )
+
+
+def extract_brand_from_review(rev):
+    """Extrait le nom de la marque associé à l'avis si disponible."""
+    return str(rev.get("product_brand") or rev.get("brand") or "").strip()
+
+
 def generate_reviews_xml(reviews, woo_url):
-    """Génère le flux XML au format officiel Google Product Reviews (v2.3) optimisé."""
+    """Génère le flux XML au format officiel Google Product Reviews (v2.4)."""
     clean_woo_url = woo_url.rstrip("/")
 
     xml_parts = [
         '<?xml version="1.0" encoding="UTF-8"?>\n',
         '<feed xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"\n',
         '      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n',
-        '      xsi:noNamespaceSchemaLocation="http://www.google.com/shopping/reviews/schema/product_reviews_schema.xsd">\n',
-        "  <version>2.3</version>\n",
+        '      xsi:noNamespaceSchemaLocation="http://www.google.com/shopping/reviews/schema/product/2.4/product_reviews.xsd">\n',
+        "  <version>2.4</version>\n",
         "  <publisher>\n",
         "    <name>Karate-Gi</name>\n",
         f"    <favicon>{clean_woo_url}/favicon.ico</favicon>\n",
@@ -91,10 +107,10 @@ def generate_reviews_xml(reviews, woo_url):
         review_id = str(rev.get("id"))
         product_id = str(rev.get("product_id", ""))
 
-        # 1. Normalisation du Rating
+        # 1. Normalisation de la note
         try:
             rating = int(rev.get("rating", 5))
-            if rating < 1 or rating > 5:
+            if not 1 <= rating <= 5:
                 rating = 5
         except (ValueError, TypeError):
             rating = 5
@@ -106,58 +122,63 @@ def generate_reviews_xml(reviews, woo_url):
         if not content_clean or len(content_clean) < 2:
             content_clean = "Avis client certifié"
 
-        # 2. Construction et nettoyage de l'URL Produit et Avis
+        # 2. Nom et URL du produit
+        product_name = sanitize_text(rev.get("product_name", ""))
         product_permalink = rev.get("product_permalink")
         if not product_permalink or "boutique" in product_permalink:
             product_permalink = f"{clean_woo_url}/?p={product_id}"
 
-        # Échappement des caractères spéciaux dans les URLs (ex: & -> &amp;)
         safe_product_url = escape(product_permalink)
         safe_review_url = escape(f"{product_permalink}#comment-{review_id}")
 
-        product_sku = str(rev.get("product_sku") or "")
+        # 3. Extraction des identifiants
+        product_sku = str(rev.get("product_sku") or "").strip()
+        gtin = extract_gtin_from_review(rev)
+        brand = extract_brand_from_review(rev)
 
-        xml_parts.append("    <review>\n")
-        xml_parts.append(f"      <review_id>{review_id}</review_id>\n")
-        xml_parts.append("      <reviewer>\n")
-        xml_parts.append(f"        <name><![CDATA[{reviewer_name}]]></name>\n")
-        xml_parts.append("      </reviewer>\n")
-        xml_parts.append(f"      <review_timestamp>{timestamp}</review_timestamp>\n")
-        xml_parts.append(f"      <content><![CDATA[{content_clean}]]></content>\n")
+        # 4. Construction des blocs optionnels pour le XML
+        gtin_block = f"""            <gtins>
+              <gtin>{escape(gtin)}</gtin>
+            </gtins>\n""" if gtin else ""
 
-        # Structure URL révisée sans CDATA mais échappée XML
-        xml_parts.append("      <review_urls>\n")
-        xml_parts.append(
-            f'        <review_url type="singleton">{safe_review_url}</review_url>\n'
-        )
-        xml_parts.append("      </review_urls>\n")
+        mpn_block = f"""            <mpns>
+              <mpn>{escape(product_sku)}</mpn>
+            </mpns>\n""" if product_sku else ""
 
-        xml_parts.append("      <ratings>\n")
-        xml_parts.append(f'        <overall min="1" max="5">{rating}</overall>\n')
-        xml_parts.append("      </ratings>\n")
+        brand_block = f"""            <brands>
+              <brand><![CDATA[{brand}]]></brand>
+            </brands>\n""" if brand else ""
+            
+        product_name_block = f"          <product_name><![CDATA[{product_name}]]></product_name>\n" if product_name else ""
+        sku_element = f"              <sku>{escape(product_sku)}</sku>\n" if product_sku else ""
 
-        # Structure Produit optimisée pour le matching
-        xml_parts.append("      <products>\n")
-        xml_parts.append("        <product>\n")
-        xml_parts.append("          <product_ids>\n")
+        # 5. Injection dans le bloc XML de l'avis (f-string multiligne pour la performance)
+        review_xml = f"""    <review>
+      <review_id>{review_id}</review_id>
+      <reviewer>
+        <name><![CDATA[{reviewer_name}]]></name>
+      </reviewer>
+      <review_timestamp>{timestamp}</review_timestamp>
+      <content><![CDATA[{content_clean}]]></content>
+      <review_urls>
+        <review_url type="singleton">{safe_review_url}</review_url>
+      </review_urls>
+      <ratings>
+        <overall min="1" max="5">{rating}</overall>
+      </ratings>
+      <products>
+        <product>
+          <product_ids>
+{gtin_block}{mpn_block}            <skus>
+{sku_element}              <sku>{product_id}</sku>
+            </skus>
+{brand_block}          </product_ids>
+{product_name_block}          <product_url>{safe_product_url}</product_url>
+        </product>
+      </products>
+    </review>\n"""
 
-        xml_parts.append("            <skus>\n")
-        if product_sku:
-            xml_parts.append(f"              <sku>{escape(product_sku)}</sku>\n")
-        # Ajout systématique de l'ID WooCommerce brut pour sécuriser le rapprochement
-        xml_parts.append(f"              <sku>{product_id}</sku>\n")
-        xml_parts.append("            </skus>\n")
-
-        if product_sku:
-            xml_parts.append("            <mpns>\n")
-            xml_parts.append(f"              <mpn>{escape(product_sku)}</mpn>\n")
-            xml_parts.append("            </mpns>\n")
-
-        xml_parts.append("          </product_ids>\n")
-        xml_parts.append(f"          <product_url>{safe_product_url}</product_url>\n")
-        xml_parts.append("        </product>\n")
-        xml_parts.append("      </products>\n")
-        xml_parts.append("    </review>\n")
+        xml_parts.append(review_xml)
 
     xml_parts.append("  </reviews>\n")
     xml_parts.append("</feed>")
