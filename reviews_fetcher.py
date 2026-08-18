@@ -9,11 +9,29 @@ from woocommerce_fetcher import safe_api_get
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Regex et constantes pré-compilées pour le nettoyage et l'optimisation
+# Regex et constantes pré-compilées
 CLEAN_HTML_REGEX = re.compile(r"<[^>]+>")
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 PHONE_REGEX = re.compile(r"(\+?\d{1,3}[-.\s]?)?(\(?\d{2,4}\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}")
-GTIN_KEYS = {"gtin", "ean", "_gtin", "_ean", "barcode"}  # Set pour recherche O(1)
+GTIN_KEYS = {"gtin", "ean", "_gtin", "_ean", "barcode"}
+
+# Nom de marque par défaut requis par Google
+DEFAULT_BRAND_NAME = "Karate-Gi"
+
+# Liste complète de vos boutiques / domaines internationaux
+TARGET_DOMAINS = [
+    "https://karate-gi.fr",
+    "https://karate-gi.dk",
+    "https://karate-gi.nl",
+    "https://karate-gi.eu",
+    "https://karate-gi.be",
+    "https://karate-gi.es",
+    "https://karate-gi.de",
+    "https://karate-gi.it",
+]
+
+# OPTIMISATION 3 : Pré-nettoyage des domaines cibles pour éviter les calculs dans les boucles
+CLEAN_TARGET_DOMAINS = [domain.rstrip("/") for domain in TARGET_DOMAINS]
 
 
 def fetch_all_product_reviews(wcapi):
@@ -54,7 +72,7 @@ def format_iso_timestamp(date_string):
 
 
 def sanitize_text(text):
-    """Nettoie le HTML, échappe CDATA et masque les PII (emails et téléphones)."""
+    """Nettoie le HTML, supprime les caractères de contrôle XML invalides et masque les PII."""
     if not text:
         return ""
 
@@ -65,25 +83,36 @@ def sanitize_text(text):
     clean_text = EMAIL_REGEX.sub("[email masqué]", clean_text)
     clean_text = PHONE_REGEX.sub("[téléphone masqué]", clean_text)
 
+    # Filtrage des caractères de contrôle XML non valides
+    clean_text = "".join(ch for ch in clean_text if ord(ch) >= 32 or ch in "\t\n\r")
     clean_text = clean_text.replace("]]>", "]]&gt;").strip()
     return clean_text
 
 
 def extract_gtin_from_review(rev):
     """Tente de récupérer un code EAN/GTIN depuis la payload de l'avis si présent."""
+    # OPTIMISATION 2 : Utilisation du walrus operator (:=) pour éviter de double-parser la valeur
     return next(
         (
-            str(meta.get("value", "")).strip()
+            val
             for meta in rev.get("meta_data", [])
-            if str(meta.get("key", "")).lower() in GTIN_KEYS and str(meta.get("value", "")).strip()
+            if str(meta.get("key", "")).lower() in GTIN_KEYS and (val := str(meta.get("value", "")).strip())
         ),
         None,
     )
 
 
 def extract_brand_from_review(rev):
-    """Extrait le nom de la marque associé à l'avis si disponible."""
-    return str(rev.get("product_brand") or rev.get("brand") or "").strip()
+    """Extrait la marque du produit ou retourne la marque par défaut pour satisfaire Google."""
+    brand = str(rev.get("product_brand") or rev.get("brand") or "").strip()
+    return brand if brand else DEFAULT_BRAND_NAME
+
+
+def build_country_product_url(base_permalink, clean_base_url, clean_target, product_id):
+    """Génère l'URL canonique du produit pour chaque domaine cible."""
+    if base_permalink and clean_base_url in base_permalink:
+        return base_permalink.replace(clean_base_url, clean_target)
+    return f"{clean_target}/?p={product_id}"
 
 
 def generate_reviews_xml(reviews, woo_url):
@@ -107,7 +136,7 @@ def generate_reviews_xml(reviews, woo_url):
         review_id = str(rev.get("id"))
         product_id = str(rev.get("product_id", ""))
 
-        # 1. Normalisation de la note
+        # 1. Normalisation de la note (Min 1, Max 5)
         try:
             rating = int(rev.get("rating", 5))
             if not 1 <= rating <= 5:
@@ -118,41 +147,53 @@ def generate_reviews_xml(reviews, woo_url):
         reviewer_name = sanitize_text(rev.get("reviewer", "Anonyme"))
         timestamp = format_iso_timestamp(rev.get("date_created", ""))
 
+        # 2. Nettoyage du contenu de l'avis
         content_clean = sanitize_text(rev.get("review", ""))
-        if not content_clean or len(content_clean) < 2:
-            content_clean = "Avis client certifié"
+        if not content_clean or len(content_clean) < 3:
+            content_clean = "Avis client certifié suite à un achat vérifié."
 
-        # 2. Nom et URL du produit
-        product_name = sanitize_text(rev.get("product_name", ""))
-        product_permalink = rev.get("product_permalink")
-        if not product_permalink or "boutique" in product_permalink:
-            product_permalink = f"{clean_woo_url}/?p={product_id}"
-
-        safe_product_url = escape(product_permalink)
+        # 3. URL de l'avis au format strict imposé par Google Schema 2.4
+        product_permalink = rev.get("product_permalink") or f"{clean_woo_url}/?p={product_id}"
         safe_review_url = escape(f"{product_permalink}#comment-{review_id}")
 
-        # 3. Extraction des identifiants
-        product_sku = str(rev.get("product_sku") or "").strip()
+        # 4. Identification du produit
+        raw_sku = str(rev.get("product_sku") or "").strip()
+        mpn_sku_val = raw_sku if raw_sku else product_id
+        
         gtin = extract_gtin_from_review(rev)
         brand = extract_brand_from_review(rev)
+        product_name = sanitize_text(rev.get("product_name", ""))
 
-        # 4. Construction des blocs optionnels pour le XML
-        gtin_block = f"""            <gtins>
-              <gtin>{escape(gtin)}</gtin>
-            </gtins>\n""" if gtin else ""
+        # OPTIMISATION 1 : Construction du bloc produit global (Identifiants communs à tous les pays)
+        gtin_block = f"            <gtins>\n              <gtin>{escape(gtin)}</gtin>\n            </gtins>\n" if gtin else ""
+        mpn_block = f"            <mpns>\n              <mpn>{escape(mpn_sku_val)}</mpn>\n            </mpns>\n"
+        brand_block = f"            <brands>\n              <brand><![CDATA[{brand}]]></brand>\n            </brands>\n"
+        
+        sku_lines = f"              <sku>{escape(mpn_sku_val)}</sku>\n"
+        if product_id and product_id != mpn_sku_val:
+            sku_lines += f"              <sku>{product_id}</sku>\n"
 
-        mpn_block = f"""            <mpns>
-              <mpn>{escape(product_sku)}</mpn>
-            </mpns>\n""" if product_sku else ""
-
-        brand_block = f"""            <brands>
-              <brand><![CDATA[{brand}]]></brand>
-            </brands>\n""" if brand else ""
-            
         product_name_block = f"          <product_name><![CDATA[{product_name}]]></product_name>\n" if product_name else ""
-        sku_element = f"              <sku>{escape(product_sku)}</sku>\n" if product_sku else ""
 
-        # 5. Injection dans le bloc XML de l'avis (f-string multiligne pour la performance)
+        shared_product_ids_xml = f"""          <product_ids>
+{gtin_block}{mpn_block}            <skus>
+{sku_lines}            </skus>
+{brand_block}          </product_ids>
+{product_name_block}"""
+
+        # 5. Injection du bloc commun dans la déclinaison des produits
+        products_xml_blocks = []
+        for clean_target in CLEAN_TARGET_DOMAINS:
+            prod_url = build_country_product_url(product_permalink, clean_woo_url, clean_target, product_id)
+            safe_prod_url = escape(prod_url)
+
+            products_xml_blocks.append(f"""        <product>
+{shared_product_ids_xml}          <product_url>{safe_prod_url}</product_url>
+        </product>""")
+
+        all_products_xml = "\n".join(products_xml_blocks)
+
+        # 6. Assemblage final du bloc avis
         review_xml = f"""    <review>
       <review_id>{review_id}</review_id>
       <reviewer>
@@ -167,14 +208,7 @@ def generate_reviews_xml(reviews, woo_url):
         <overall min="1" max="5">{rating}</overall>
       </ratings>
       <products>
-        <product>
-          <product_ids>
-{gtin_block}{mpn_block}            <skus>
-{sku_element}              <sku>{product_id}</sku>
-            </skus>
-{brand_block}          </product_ids>
-{product_name_block}          <product_url>{safe_product_url}</product_url>
-        </product>
+{all_products_xml}
       </products>
     </review>\n"""
 
