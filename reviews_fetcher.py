@@ -15,10 +15,10 @@ EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 PHONE_REGEX = re.compile(r"(\+?\d{1,3}[-.\s]?)?(\(?\d{2,4}\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}")
 GTIN_KEYS = {"gtin", "ean", "_gtin", "_ean", "barcode"}
 
-# Nom de marque par défaut requis par Google
+# Nom de marque par défaut requis par Google si absent du produit
 DEFAULT_BRAND_NAME = "Karate-Gi"
 
-# Liste complète de vos boutiques / domaines internationaux
+# Liste complète de vos boutiques / domaines internationaux pour les sous-comptes Google Shopping
 TARGET_DOMAINS = [
     "https://karate-gi.fr",
     "https://karate-gi.dk",
@@ -30,7 +30,7 @@ TARGET_DOMAINS = [
     "https://karate-gi.it",
 ]
 
-# OPTIMISATION 3 : Pré-nettoyage des domaines cibles pour éviter les calculs dans les boucles
+# Optimisation : Pré-nettoyage des domaines cibles
 CLEAN_TARGET_DOMAINS = [domain.rstrip("/") for domain in TARGET_DOMAINS]
 
 
@@ -91,7 +91,6 @@ def sanitize_text(text):
 
 def extract_gtin_from_review(rev):
     """Tente de récupérer un code EAN/GTIN depuis la payload de l'avis si présent."""
-    # OPTIMISATION 2 : Utilisation du walrus operator (:=) pour éviter de double-parser la valeur
     return next(
         (
             val
@@ -152,7 +151,7 @@ def generate_reviews_xml(reviews, woo_url):
         if not content_clean or len(content_clean) < 3:
             content_clean = "Avis client certifié suite à un achat vérifié."
 
-        # 3. URL de l'avis au format strict imposé par Google Schema 2.4
+        # 3. URL de l'avis au format strict Google Schema 2.4 (type="group" et SANS balise englobante <review_urls>)
         product_permalink = rev.get("product_permalink") or f"{clean_woo_url}/?p={product_id}"
         safe_review_url = escape(f"{product_permalink}#comment-{review_id}")
 
@@ -164,7 +163,7 @@ def generate_reviews_xml(reviews, woo_url):
         brand = extract_brand_from_review(rev)
         product_name = sanitize_text(rev.get("product_name", ""))
 
-        # OPTIMISATION 1 : Construction du bloc produit global (Identifiants communs à tous les pays)
+        # Construction du bloc d'identifiants partagé entre tous les pays
         gtin_block = f"            <gtins>\n              <gtin>{escape(gtin)}</gtin>\n            </gtins>\n" if gtin else ""
         mpn_block = f"            <mpns>\n              <mpn>{escape(mpn_sku_val)}</mpn>\n            </mpns>\n"
         brand_block = f"            <brands>\n              <brand><![CDATA[{brand}]]></brand>\n            </brands>\n"
@@ -181,7 +180,7 @@ def generate_reviews_xml(reviews, woo_url):
 {brand_block}          </product_ids>
 {product_name_block}"""
 
-        # 5. Injection du bloc commun dans la déclinaison des produits
+        # 5. Injection du bloc commun dans la déclinaison des sous-comptes pays
         products_xml_blocks = []
         for clean_target in CLEAN_TARGET_DOMAINS:
             prod_url = build_country_product_url(product_permalink, clean_woo_url, clean_target, product_id)
@@ -193,7 +192,7 @@ def generate_reviews_xml(reviews, woo_url):
 
         all_products_xml = "\n".join(products_xml_blocks)
 
-        # 6. Assemblage final du bloc avis
+        # 6. Assemblage final strict conforme à product_reviews.xsd v2.4
         review_xml = f"""    <review>
       <review_id>{review_id}</review_id>
       <reviewer>
@@ -201,9 +200,7 @@ def generate_reviews_xml(reviews, woo_url):
       </reviewer>
       <review_timestamp>{timestamp}</review_timestamp>
       <content><![CDATA[{content_clean}]]></content>
-      <review_urls>
-        <review_url type="singleton">{safe_review_url}</review_url>
-      </review_urls>
+      <review_url type="group">{safe_review_url}</review_url>
       <ratings>
         <overall min="1" max="5">{rating}</overall>
       </ratings>
