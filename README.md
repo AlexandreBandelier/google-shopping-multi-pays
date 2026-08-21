@@ -74,19 +74,6 @@ Le pipeline gère **8 domaines & langues** distincts avec adaptation automatique
 
 
 
----
-
-## Volet Data Analysis & Business Intelligence
-
-Les flux XML structurés et nettoyés issus du pipeline constituent une excellente source de données unifiée pour des projets d'**Analyse de Données / Business Intelligence** :
-
-### Cas d'usages d'Analyse :
-
-* **Analyse d'Offre Multi-Marchés :** Comparaison de l'étendue des catalogues et du niveau des stocks par pays/marché.
-* **Pricing & Monitoring Devises :** Alignement des prix EUR vs DKK et détection des écarts de marge.
-* **Analyse de la Matrice Produits (Variations) :** Segmentation de la rentabilité par sous-catégories grâce aux `custom_label`.
-* **Analyse de Sentiment & Qualité (Avis Clients) :** Dashboard de la satisfaction client et des notes moyennes attribuées par produit.
-
 ### Stack Data recommandée :
 
 * **Python / Pandas / DuckDB :** Parsing des flux XML pour transformation en DataFrames / Tables SQL.
