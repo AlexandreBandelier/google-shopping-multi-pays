@@ -8,8 +8,6 @@ Ce projet automatise la génération, la localisation, la synchronisation et l'a
 
 Le script se connecte aux différentes instances de la boutique via l'API REST WooCommerce, extrait les produits (simples et déclinaisons), nettoie et normalise la donnée pour la rendre conforme aux exigences de **Google Merchant Center**, puis téléverse automatiquement les flux XML dans un dossier **Google Drive** centralisé via GitHub Actions.
 
-Un volet **Data Analysis** permet également d'exploiter les flux XML générés pour effectuer du reporting e-commerce et piloter le catalogue produit.
-
 ---
 
 ## Couverture Multi-Pays & Multi-Devises
