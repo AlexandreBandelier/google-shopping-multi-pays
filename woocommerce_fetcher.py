@@ -15,6 +15,8 @@ def safe_api_get(wcapi, endpoint, params=None, max_retries=3):
             # Optimisation 1 : wcapi utilise en interne la librairie requests.
             # L'appel direct reste le même, mais la gestion réseau est sécurisée.
             response = wcapi.get(endpoint, params=params)
+
+            time.sleep(0.5)
             
             # Traitement explicite des codes HTTP
             if response.status_code == 200:
