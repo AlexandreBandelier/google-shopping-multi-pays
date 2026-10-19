@@ -1,9 +1,9 @@
 name: Generate Google Shopping Feed
 
 on:
-  schedule:
-    # Exécution chaque nuit à 02:00 UTC
-    - cron: '0 4 * * *'
+  # schedule:
+  #   # Exécution chaque nuit à 02:00 UTC (Mis en pause temporairement)
+  #   - cron: '0 4 * * *'
   workflow_dispatch: # Permet le lancement manuel depuis l'interface GitHub
 
 jobs:
