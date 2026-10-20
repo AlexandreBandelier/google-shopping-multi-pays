@@ -54,6 +54,9 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
     domain_info = DOMAIN_CONFIG.get(lang, {"domain": os.getenv("WOO_URL", "https://karate-gi.fr")})
     channel_link = domain_info["domain"]
 
+    # Extraction automatique de l'étiquette de flux (ex: "es_ES" -> "ES", "fr_BE" -> "BE")
+    feed_label = lang.split("_")[1].upper() if "_" in lang else "FR"
+
     # Optimisation 2 : Pré-allocation implicite du buffer mémoire via StringIO
     buffer = io.StringIO()
 
@@ -70,6 +73,9 @@ def generate_rss_xml(cleaned_products, lang="fr_FR"):
     for prod in cleaned_products:
         buffer.write("      <item>\n")
         buffer.write(f'        <g:id>{prod["id"]}</g:id>\n')
+        
+        # Injection de l'étiquette de flux pour Microsoft et Google Merchant Center
+        buffer.write(f'        <g:feed_label>{feed_label}</g:feed_label>\n')
 
         if prod.get("item_group_id"):
             buffer.write(
