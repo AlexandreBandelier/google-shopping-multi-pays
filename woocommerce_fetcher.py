@@ -16,7 +16,8 @@ def safe_api_get(wcapi, endpoint, params=None, max_retries=3):
             # L'appel direct reste le même, mais la gestion réseau est sécurisée.
             response = wcapi.get(endpoint, params=params)
 
-            time.sleep(0.5)
+            # Ralenti x10 : Pause de 5 secondes au lieu de 0.5 pour soulager le serveur
+            time.sleep(5.0)
             
             # Traitement explicite des codes HTTP
             if response.status_code == 200:
@@ -27,7 +28,7 @@ def safe_api_get(wcapi, endpoint, params=None, max_retries=3):
                     f"Tentative {attempt}/{max_retries} - Erreur API {endpoint} : "
                     f"Code {response.status_code}. Attente..."
                 )
-                time.sleep((2 ** attempt))
+                time.sleep((2 ** attempt) * 2) # Légèrement majoré pour laisser le serveur redescendre
             else:
                 logger.error(f"Erreur fatale API {endpoint} (Code {response.status_code}): {response.text}")
                 return []
