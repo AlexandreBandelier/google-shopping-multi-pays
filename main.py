@@ -43,7 +43,7 @@ def cdata(value):
     if not value:
         return ""
     safe_val = str(value).replace("]]>", "]]&gt;")
-    return f"<![CDATA[{safe_val}]]>"
+    return f"<![CDATA[^{safe_val}]]>".replace("^", "") # Garde le CDATA propre
 
 
 def generate_rss_xml(cleaned_products, lang="fr_FR"):
